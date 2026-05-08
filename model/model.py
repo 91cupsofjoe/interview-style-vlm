@@ -1,173 +1,229 @@
-import math
 from pydantic import BaseModel
 
-import torch
-import torch.nn.functional as nnf
+from model import layer as ly
+from model import loss
 
-from dataset import dataset as ds
-
-BATCH_SIZE = 32 # Default batch size for training
-NUM_CHANNELS = 3 # Default number of input channels for convolution
-NUM_OUT_FEATURES = 64 # Default number of output features for convolution
-KERNEL_SIZE = 3 # Default kernel size for convolution = (3, 3)
-EMBEDDING_SIZE = 128 # Default embedding size for projection output
-CONV_SEQ_LEN= 8 # Default sequence length for convolution
-PROJ_SEQ_LEN= 8 # Default sequence length for projection
-POOLING_DIMS = 2 # Default pooling dimensions = (2, 2)
-POOLING_TYPE = "max" # Default pooling type
-STRIDE = 1 # Default stride for convolution and pooling
-PADDING = 0 # Default padding for convolution
+CONV_SEQ_LEN = 8 # Default sequence length for convolution
+PROJ_SEQ_LEN = 8 # Default sequence length for projection
+# The rest of the hyperparameters for the model are defined in the layer module
 
 class Model(BaseModel):
-    def __init__(self):
-        self.model = None
-        self.convolution_weights_biases = None
-        self.projection_weights_biases = None
 
-    def forward_conv(
-            self,
-            # Tensor of batch size x RGB channels x height x width
-            input_patches, batch_size=BATCH_SIZE,
-            num_channels=NUM_CHANNELS, num_out_features=NUM_OUT_FEATURES,
-            kernel_size=KERNEL_SIZE, # embedding_size=EMBEDDING_SIZE,
-            seq_len=CONV_SEQ_LEN, # proj_seq_len=PROJ_SEQ_LEN,
-            stride=STRIDE, padding=PADDING,
-            pooling_dims=POOLING_DIMS, pooling_type=POOLING_TYPE,
-            convolution_weights_biases=[], # projection_weights_biases=[]
-        ):
-        """
-        Perform the forward pass
+    # Establish the valid hyperparameters for each of the layers
+    conv_layer_args = {
+        'num channels', 'num out features',
+        'kernel size', 'stride', 'padding',
+        'pool size', 'pool stride', 'pool type'
+    }
+    proj_layer_args = {
+        'embedding size'
+    }
+
+    # Establish the valid post-convolution function categories
+    function_categories = {
+        'apply', 'unapply'
+    }
+
+    def __init__(self,
+        conv_layers: dict = {},
+        proj_layers: dict = {},
+        functions = {
+            'apply': [],
+            'unapply': []
+        }
+    ):
+        # Read in a dict of convolution layer hyperparams to create one or more
+        #   convolution layers
+        self.conv_layers = {}
+        for conv_layer_hyperparams in conv_layers:
+            self.create_conv_layer(conv_layer_hyperparams)
+
+        # Do the same for projection layers and their hyperparameters
+        for proj_layer_hyperparams in proj_layers:
+            self.create_proj_layer(proj_layer_hyperparams)
+        self.proj_layers = {}
         
-        Args:
-            input_patches (Tensor): The input patches Tensor
-            
-        Return:
-            The output projection (prediction) Tensor
+        # Store list of functions to apply between convolution ans projection
+        self.functions = {}
+        # Check if functions are provided as a dictionary and parse accordingly
+        if isinstance(functions, dict):
+            for func_cat in functions:
+                if func_cat in self.function_categories:
+                    self.functions[func_cat] = functions[func_cat]
+
+    def create_conv_layer(self,
+        conv_layer_hyperparams: dict = {}
+    ):
         """
-        # NOTE: Use the model's internal weights and biases if not provided
-        while len(convolution_weights_biases) < seq_len:
-            convolution_weights_biases.append((None, None))
-
-        # For each convolution layer, perform
-        #   convolution, ReLU activation, and pooling
-        for i in range(seq_len):
-            W_conv, b_conv = convolution_weights_biases[i]
-            # Randomize the convolution weight and bias is not already set
-            if W_conv is None or b_conv is None:
-                W_conv = torch.randn(num_out_features, num_channels, kernel_size)
-                b_conv = torch.randn(num_out_features)
-
-            # Convolution and pooling for the sequence
-            z_conv = self.get_conv2d(input_patches, W_conv, b_conv,
-                            stride=stride, padding=padding)
-            
-            # ReLU activation
-            h = self.get_ReLU(z_conv)
-
-            # Pooling
-            input_patches = self.get_pooled(h, kernel_size=pooling_dims,
-                            stride=stride, type=pooling_type)
-            
-        # Return the convolution output of the final convolution layer
-        return input_patches
-
-    def forward_proj(self,
-            # Tensor of batch size x RGB channels x height x width
-            input_patches, batch_size=BATCH_SIZE,
-            num_channels=NUM_CHANNELS, num_out_features=NUM_OUT_FEATURES,
-            kernel_size=KERNEL_SIZE, # embedding_size=EMBEDDING_SIZE,
-            seq_len=CONV_SEQ_LEN, # proj_seq_len=PROJ_SEQ_LEN,
-            stride=STRIDE, padding=PADDING,
-            projection_weights_biases=[]
-        ):
-        # Randomize the projection weight and bias if not already set
-        if W_proj is None or b_proj is None:
-            # Num patches is the 2nd dimension (index 1) for h
-            W_proj = torch.randn(embedding_size, h.shape[1])
-            b_proj = torch.randn(embedding_size)
-
-    def predict(self, preprocessed_image):
-        """
-        Take a preprocessed image as input and return a predicted caption
+        Create and store a convolution layer based on specified hyperparameters
 
         Args:
-            preprocessed_image (Tensor): Tensor for the preprocessed image
+            conv_layer_hyperparams (dict): The dictionary of hyperparameters
 
         Return:
-            The predicted caption for the query image
+            None
         """
-        # Open 
-
-    # =========================== HELPER FUNCTIONS ============================
-
-    def get_conv2d(self, x, W, b, stride=STRIDE, padding=PADDING):
-        batch_size, channels, image_h, image_w = x.shape
-        num_out_features, _, kernel_h, kernel_w = W.shape
-
-        # Calculate the spatial grid dimensions from subtracting the kernel
-        #   dimensions and factoring in jump size (stride) and border (padding)
-        h_out = math.floor( (image_h + 2 * padding - kernel_h) / stride) + 1
-        w_out = math.floor( (image_w + 2 * padding - kernel_w) / stride) + 1
-
-        # Calculate patch size and num patches
-        patch_size = channels * kernel_h * kernel_w
-        num_patches = h_out * w_out
-
-        # Get input tensor with dims:
-        #   batch size, patch size, num patches
-        input_tensor = nnf.unfold(x, kernel_size=(kernel_h, kernel_w),
-                        padding=padding, stride=stride)
+        # Set default sequence id for the convolution layer to be created
+        seq_id = len(conv_layer_hyperparams)
+        # If a sequence id is provided, use that for the, but check for
+        #   duplicate keys
+        if 'seq id' in conv_layer_hyperparams.keys():
+            temp_id = conv_layer_hyperparams['seq id']
+            if temp_id not in self.conv_layers.keys():
+                seq_id = temp_id
         
-        # Transpose input tensor, switching its dimensions from [batch size,
-        #   patch size, num patches] to [batch size, num patches, patch size]
-        input_tensor = input_tensor.transpose(1, 2)
+        # Add the convolution layer to the model
+        self.conv_layers[seq_id] = ly.ConvLayer(
+            {k: v for k, v in conv_layer_hyperparams.items()
+             if k in self.conv_layer_args}
+        )
 
-        # Make sure the shape of the output tensor =
-        #   (batch size, patch size, num patches)
-        assert(input_tensor.shape == (batch_size, patch_size, num_patches))
-        
-        # Get flattened weight matrix with dims:
-        #   num output features, num channels * kernel h * kernel w
-        W_flat = W.view(num_out_features, -1)
+    def create_proj_layer(self,
+        proj_layer_hyperparams: dict = {}
+    ):
+        """
+        Create and store a linear projection layer based on specified hyperparameters
 
-        # Get output tensor with dims:
-        #   batch size, num output features, num patches
-        output_tensor = input_tensor @ W_flat.T
+        Args:
+            proj_layer_hyperparams (dict): The dictionary of hyperparameters
 
-        # Swap the num output features and num patches dimensions
-        output_tensor.transpose(1, 2)
+        Return:
+            None
+        """
+        # Set default sequence id for the convolution layer to be created
+        seq_id = len(proj_layer_hyperparams)
+        # If a sequence id is provided, use that for the, but check for
+        #   duplicate keys
+        if 'seq id' in proj_layer_hyperparams.keys():
+            temp_id = proj_layer_hyperparams['seq id']
+            if temp_id not in self.conv_layers.keys():
+                seq_id = temp_id
 
-        # For each spatial position in each batch image in a feature map,
-        #   add the scalar bias value associated with that feature.
-        output_tensor += b.view(1, 1, -1) # b.view(1, 1, num out features)
+        # Add the projection layer to the model
+        self.proj_layers[seq_id] = ly.ProjLayer(
+            {k: v for k, v in proj_layer_hyperparams.items()
+             if k in self.proj_layer_args}
+        )
 
-        # Reshape the output tensor's spatial dimensions (num_patches)
-        #   according to calculated height and width from stride and padding
-        output_tensor = output_tensor.reshape(
-                        batch_size, num_out_features, h_out, w_out)
-        
-        # Finally return the output tensor
-        return output_tensor
-    
-    def get_ReLU(self, x):
-        # ReLU activation function (per element e): max(e, 0)
-        return torch.clamp(x, min=0)
-    
-    def get_pooled(self, x, kernel_size=(2, 2), stride=1, type="max"):
-        if type == "average":
-            return nnf.avg_pool2d(x, kernel_size=kernel_size, stride=stride)
-        # Else, return average pooling -- the default
-        return nnf.max_pool2d(x, kernel_size=kernel_size, stride=stride)
-    
-    def get_projection(self, x, W, b):
-        # The projection output should have dimensions
-        #   batch size x num patches x embedding size
-        return x @ W.T + b
-    
+    def forward(self, x):
+        """
+        Feed input patches through convolution layers and projection layers to
+            get the final projection output
+
+        Args:
+            x (Tensor): input patches
+
+        Return:
+            A transformed projection output Tensor
+        """
+        # Run the sequence of convolution layers on the input patches
+        #   to get the convolution output
+        for conv_layer in self.conv_layers:
+            x = conv_layer.forward(x)
+
+        # Apply the post convolution functions
+        #   Ex: For image captioning, flatten the convolution output
+        for f in self.functions['apply']:
+            x = f(x)
+
+        # Run the sequence of projection layers on the convolution output
+        #   to get the projection output
+        for proj_layer in self.proj_layers:
+            x = proj_layer.forward(x)
+
+        # Return the projection output
+        return x
+
+    def get_loss(self,
+        predictions, true_labels, predictions_dim=0
+    ):
+        """
+        Calculate a scalar value (loss) representing how off model predictions
+            are from their respective true labels
+
+        Args:
+            predictions (Tensor): predictions Tensor
+            true_labels (Tensor): true Labels Tensor
+            predictions_dim (int): Dimension along the predictions Tensor
+                containing the logits
+        """
+        return loss.cross_entropy_loss(
+            predictions=predictions,
+            predictions_dim=predictions_dim,
+            true_labels=true_labels,
+            weights = [
+                weight for weight, _ in
+                    [layer for _, layer in
+                        [set(self.conv_layers.items()).union(
+                            set(self.proj_layers.items()))
+                        ]
+                    ]
+            ]
+        )
+
+    def backprop(self, predictions, true_labels):
+        """
+        Move backward from the loss function to the projection and convolution
+            layers to determine how each weight and bias contributed to the total
+            prediction error
+
+        Args:
+            input_patches (Tensor): the input patches
+
+        Return:
+            None
+        """
+        # First get the derivative of the loss function wrt to the projection
+        #   output = 2 * (z_proj - y)
+        d_zproj = 2 * (predictions - true_labels)
+
+        # Iterate through the projection layers to update the derivative of the
+        #   loss function wrt to the projection output
+        for i in range(len(self.proj_layers) - 1, -1):
+            proj_layer = self.proj_layers[i]
+            d_zproj = proj_layer.backward(d_zproj)
+
+        # Get the last convolution layer output
+        last_conv_layer = self.conv_layers[len(self.conv_layers) - 1]
+        _, _, z_conv, _, _, _ = last_conv_layer.__get__()
+
+        # Unapply post-convolution functions to get the derivative of the loss
+        #   function wrt to the convolution output
+        for f in self.functions['unapply']:
+            d_zconv = f(d_zproj, z_conv)
+
+        # Iterate through the convolution layers to update the derivative of
+        #   the loss function wrt to the convolution output
+        for i in range(len(self.conv_layers) - 1, -1):
+            conv_layer = self.conv_layers[i]
+            d_zconv = conv_layer.backward(d_zconv)
+
+        # Return the updated derivative of the loss function wrt to the
+        #   convolution output = the loss derivative wrt to the convolution input
+        return d_zconv # d_input_patches
+
+    def update(self,
+        learning_rate,
+        convolution_weight, convolution_bias,
+        projection_weight, projection_bias,
+        conv_weight_change, conv_bias_change,
+        proj_weight_change, proj_bias_change
+    ):
+        return self.get_updates(
+            learning_rate=learning_rate,
+            W_conv=convolution_weight, b_conv=convolution_bias,
+            W_proj=projection_weight, b_proj=projection_bias,
+            grad_Wconv=conv_weight_change, grad_bconv=conv_bias_change,
+            grad_Wproj=proj_weight_change, grad_bproj=proj_bias_change
+        )
+
+    # ========================== HELPER FUNCTIONS =============================
+
     def get_gradients(self,
-                 x, z_conv, # W_conv and b_conv not used
-                 h, W_proj, z_proj, # b_proj not used
-                 true_label):
+        x, z_conv, # W_conv and b_conv not used
+        h, W_proj, z_proj, # b_proj not used
+        true_labels
+    ):
         """
         Perform backpropagation to get the derivative of the loss function w.r.t:
             1. the convolution weight
@@ -176,21 +232,21 @@ class Model(BaseModel):
             4. the projection bias
 
         Args:
-            x (tensor): the input patches
-            W_conv (tensor): the convolution weight -- NOT USED
-            b_conv (tensor): the convolution bias -- NOT USED
-            z_conv (tensor): the convolution output
-            h (tensor): the flattened convolution output = the projection input
-            W_proj (tensor): the projection weight
-            b_proj (tensor): the projection bias -- NOT USED
-            z_proj (tensor): the projection output = the prediction
+            x (Tensor): the input patches
+            W_conv (Tensor): the convolution weight -- NOT USED
+            b_conv (Tensor): the convolution bias -- NOT USED
+            z_conv (Tensor): the convolution output
+            h (Tensor): the flattened convolution output = the projection input
+            W_proj (Tensor): the projection weight
+            b_proj (Tensor): the projection bias -- NOT USED
+            z_proj (Tensor): the projection output = the prediction
             true_label (float): the true labels for the batch of images
 
         Return:
-            grad_Wconv (tensor): The gradient for the convolution weight
-            grad_bconv (tensor): The gradient for the convolution bias
-            grad_Wproj (tensor): The gradient for the projection weight
-            grad_bproj (tensor): The gradient for the projection bias
+            grad_Wconv (Tensor): The gradient for the convolution weight
+            grad_bconv (Tensor): The gradient for the convolution bias
+            grad_Wproj (Tensor): The gradient for the projection weight
+            grad_bproj (Tensor): The gradient for the projection bias
 
         Using d(x) = the derivative of x,
             d(y)/d(x) = the derivative of y w.r.t. x
@@ -297,45 +353,50 @@ class Model(BaseModel):
                projection output and the target label.
         """
         # d(L)/d(z_proj) = 2 * (z_proj - y)
-        dL_dz_proj = 2 * (z_proj - true_label)
+        dL_dz_proj = 2 * (z_proj - true_labels)
 
         # d(L)/d(W_conv) = x^T * reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv))
-        grad_Wconv = x.T @ (dL_dz_proj @ W_proj.T).reshape(z_conv.shape)
+        grad_Wconv = x.T @ (dL_dz_proj @ W_proj.T)
         # d(L)/d(b_conv) = reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv))
         #   Sum over all patches to get a 1-d vector (same shape as conv bias)
-        grad_bconv = ((dL_dz_proj @ W_proj.T).reshape(z_conv.shape)).sum(dim=(0, 2, 3))
+        unflatten = (dL_dz_proj @ W_proj.T).reshape(z_conv.shape)
+        grad_bconv = (unflatten).sum(dim=
+                        tuple([i for i in unflatten.shape if i != feature_dim]))
         # d(L)/d(W_proj) = h^T * 2 * (z_proj - y)
         grad_Wproj = h.T @ dL_dz_proj
         # d(L)/d(b_proj) = 2 * (z_proj - y)
         #   Sum over all patches to get a 1-d vector (same shape as proj bias)
-        grad_bproj = dL_dz_proj.sum(axis=0)
+        grad_bproj = dL_dz_proj.sum(axis=
+                        tuple([i for i in dL_dz_proj.shape if i != embedding_dim]))
 
         # Return the gradients
         return grad_Wconv, grad_bconv, grad_Wproj, grad_bproj
     
-    def get_updates(self, learning_rate,
-                    W_conv, b_conv, W_proj, b_proj,
-                    grad_Wconv, grad_bconv, grad_Wproj, grad_bproj,
-            ):
+    def get_updates(self,
+        learning_rate,
+        W_conv, b_conv, W_proj, b_proj,
+        grad_Wconv, grad_bconv, grad_Wproj, grad_bproj
+    ):
         """
         Return the updated convolution weight, convolution bias, projection
             weight, and projection bias based on their respective gradients
 
         Args:
-            W_conv (tensor): the convolution weight
-            b_conv (tensor): the convolution bias
-            W_proj (tensor): the projection weight
-            b_proj (tensor): the projection bias
-            grad_Wconv (tensor): The gradient for the convolution weight
-            grad_bconv (tensor): The gradient for the convolution bias
-            grad_Wproj (tensor): The gradient for the projection weight
-            grad_bproj (tensor): The gradient for the projection bias
+            learning_rate (float): the model's learning weight
+            W_conv (Tensor): the convolution weight
+            b_conv (Tensor): the convolution bias
+            W_proj (Tensor): the projection weight
+            b_proj (Tensor): the projection bias
+            grad_Wconv (Tensor): The gradient for the convolution weight
+            grad_bconv (Tensor): The gradient for the convolution bias
+            grad_Wproj (Tensor): The gradient for the projection weight
+            grad_bproj (Tensor): The gradient for the projection bias
 
         Return:
-            Wconv_new (tensor): the updated convolution weight
-            bconv_new (tensor): the updated convolution bias
-            Wproj_new (tensor): the updated projection weight
-            bproj_new (tensor): the updated projection bias
+            Wconv_new (Tensor): the updated convolution weight
+            bconv_new (Tensor): the updated convolution bias
+            Wproj_new (Tensor): the updated projection weight
+            bproj_new (Tensor): the updated projection bias
         """
         
         # Get the updated weights and biases
