@@ -2,64 +2,67 @@ import math
 
 from pydantic import BaseModel
 import torch
-import torch.nn.functional as nnf
 
-from util import util
-from model import image_encoder as ie
 
-BATCH_SIZE = 32 # Default batch size for training
+class Layer(BaseModel):
+    def __init__(self):
+        # Attributes will store weight, bias, derivatives, and hyperparameters
+        self.attr = {}
+
+    def __get__(self, attribute = None):
+        # Check if a valid attribute key was provided
+        if attribute and attribute in self.attr.keys:
+            return self.attr[attribute]
+        # Else, return the entire attributes dictionary
+        return self.attr
+    
+    def __set__(self, key, value):
+        # Set the attribute key and value to attributes
+        self.attr[key] = value
+
+
+# =========================== CONVOLUTION LAYER ===============================
+
 NUM_CHANNELS = 3 # Default number of input channels for convolution
 NUM_OUT_FEATURES = 64 # Default number of output features for convolution
-FEATURES_DIM = 1 # Default dimension for output features for convolution
 KERNEL_SIZE = 3 # Default kernel size for convolution = (3, 3)
 STRIDE = 1 # Default stride for convolution and pooling
 PADDING = 0 # Default padding for convolution
 POOL_SIZE = 2 # Default pooling dimensions = (2, 2)
 POOL_STRIDE = 2 # Default pooling stride
 POOL_TYPE = "max" # Default pooling type
-EMBEDDING_SIZE = 128 # Default embedding size for projection
-EMBEDDINGS_DIM = 1 # Default embedding dimension for projection
-
-class Layer(BaseModel):
-    def __init__(self,
-        W=None,b=None,
-    ):
-        self.W = W
-        self.b = b
-        self.dW = None # the derivative w.r.t. the weight matrix
-        self.db = None # the derivative w.r.t. the bias vector
-
-    def __output__(self):
-        # Return the layer's weight matrix and bias vector
-        return self.W, self.b
 
 class ConvLayer(Layer):
     def __init__(self,
-        W=None,b=None,
-        num_channels=NUM_CHANNELS,
-        num_out_features=NUM_OUT_FEATURES, features_dim=FEATURES_DIM,
+        W=None,b=None, x=None,
+        num_channels=NUM_CHANNELS, num_out_features=NUM_OUT_FEATURES,
         kernel_size=KERNEL_SIZE, stride=STRIDE, padding=PADDING,
         pool_size=POOL_SIZE, pool_stride=POOL_STRIDE, pool_type=POOL_TYPE
     ):
-        super().__init__(W=W, b=b)
+        super().__init__()
 
-        self.num_channels = num_channels
-        self.num_out_features = num_out_features
-        self.features_dim = features_dim
-        self.kernel_size = util.get_tuple(kernel_size)
-        self.stride = stride
-        self.padding = padding
-        self.pool_size = pool_size
-        self.pool_stride = pool_stride
-        self.pool_type = pool_type
+        # Convolution layer attributes
+        self.attr = {
+            # Tensors
+            'W_conv': W, # Convolution weight
+            'b_conv': b, # Convolution bias
+            'x': x, # Input patches
+            'z_conv': None, # Convolution output
+            'd_Wconv': None, # Derivative of loss wrt convolution weight
+            'd_bconv': None, # Derivative of loss wrt bias
 
-        self.x = None
-        self.z_conv = None
+            # Hyperparameters
+            'num_channels': num_channels, # Number of input channels
+            'num_out_features': num_out_features, # Number of output features
+            'kernel_size': kernel_size, # Dimensions of the filter
+            'stride': stride, # Number of pixels the filter moves
+            'padding': padding, # Number of pixels added around filter
+            'pool_size': pool_size, # The dimensions of the pool window
+            'pool_stride': pool_stride, # The number of pixels per window move
+            'pool_type': pool_type # The type of pool operation (max or average)
+        }
 
-    def __get__(self):
-        return self.W, self.b, self.x, self.z_conv, self.dW, self.db
-
-    def forward(self, x):
+    def forward(self, x, conv_func):
         """
         Feed the input patches Tensor through the convolution layer
 
@@ -70,76 +73,109 @@ class ConvLayer(Layer):
             x (Tensor): The ReLU activated, pooled convolution output Tensor
         """
         # First store a copy of the input patches Tensor
-        self.x = x.clone()
+        self.attr['x'] = x.clone()
 
         # Check convolution layer's weight and bias have been initialized
         #   If not, use the num out features, num channels, and kernel size
         #   to initialize the weight and bias
         if self.W is None or self.b is None:
             self.W = torch.randn(
-                self.num_out_features, self.num_channels,
-                self.kernel_size[0], self.kernel_size[1]
+                self.attr['num_out_features'], self.attr['num_channels'],
+                self.attr['kernel_size'][0], self.attr['kernel_size'][1]
             )
-            self.b = torch.randn(self.num_out_features)
+            self.b = torch.randn(self.attr['num_out_features'])
         
-        # Apply convolution to the input Tensor
-        x = ie.get_conv2d(
-            x, self.W, self.b,
-            stride=self.stride, padding=self.padding
-        )
-        
-        # Apply ReLU activation to the convolution output Tensor
-        x = util.get_ReLU(x)
-        
-        # Apply pooling to the ReLU activated convolution output Tensor
-        x = ie.get_pool(
-            x,
-            kernel_size=self.pool_size,
-            stride=self.pool_stride,
-            pool_type=self.pool_type
-        )
+        # Apply convolution to the input patches Tensor
+        try:
+            conv_func = self.attr['conv_func']
+            conv_func_params = self.attr['conv_func_params']
+            z_conv = conv_func(x, conv_func_params)
+        except:
+            raise RuntimeError("Could not run convolution!")
 
         # Store a copy of the pooled, ReLU activated convolution output Tensor
         #   and return the original
-        self.z_conv = x.clone()
-        return x
+        self.z_conv = z_conv.clone()
+        return z_conv
     
     def backward(self, d_zconv):
         """
-        Feed the derivative of the loss function wrt the convolution output
-            backward through the convolution layer, updating the derivatives
-            of the loss function wrt both the convolution weight and the
-            convolution bias
+        Feed the convolution output gradient Tensor backward through the
+            convolution layer, to update the convolution weight and bias
+            gradient Tensors and get the input patches gradient
 
         Args:
-            d_zproj (Tensor): The derivative of the loss function
-                wrt the projection output
+            d_zproj (Tensor): The convolution output gradient Tensor
 
         Return:
-            The updated derivative of the loss function wrt the projection output
+            The input patches gradient
         """
-        self.dW = self.x.T @ d_zconv
-        self.db = d_zconv.sum(axis=
-                        tuple([i for i in d_zconv.shape
-                               if i != self.features_dim])
-        )
-        return d_zconv @ self.W.T
+        # First store a copy of the input patches Tensor
+        self.attr['x'] = x.clone()
+
+        # Check convolution layer's weight and bias have been initialized
+        #   If not, use the num out features, num channels, and kernel size
+        #   to initialize the weight and bias
+        if self.W is None or self.b is None:
+            self.W = torch.randn(
+                self.attr['num_out_features'], self.attr['num_channels'],
+                self.attr['kernel_size'][0], self.attr['kernel_size'][1]
+            )
+            self.b = torch.randn(self.attr['num_out_features'])
+        
+        # Apply convolution to the input patches Tensor
+        try:
+            conv_func = self.attr['conv_func']
+            conv_func_params = self.attr['conv_func_params']
+            z_conv = conv_func(x, conv_func_params)
+        except:
+            raise RuntimeError("Could not run convolution!")
+
+        # Store a copy of the pooled, ReLU activated convolution output Tensor
+        #   and return the original
+        self.z_conv = z_conv.clone()
+        return z_conv
+    
+    def transform(self, tensor, transform):
+        """
+        Perform a forward pass or backpropagation transformation on the input
+            Tensor
+
+        Args:
+
+        """
+
+
+# ============================ PROJECTION LAYER ===============================
+
+EMBEDDING_SIZE = 128 # Default embedding size for projection
 
 class ProjLayer(Layer):
     def __init__(self,
-        W=None, b=None,
-        embedding_size=EMBEDDING_SIZE,
-        embeddings_dim=EMBEDDINGS_DIM
+        W=None, b=None, h=None,
+        proj_func=None, proj_func_params=None,
+        embedding_size=EMBEDDING_SIZE
     ):
-        super().__init__(W=W, b=b)
+        super().__init__()
 
-        self.embedding_size = embedding_size
-        self.embeddings_dim = embeddings_dim
+        if proj_func_params is None:
+            proj_func_params = {}
 
-    def __get__(self):
-        return self.W, self.b, self.h, self.z_proj, self.dW, self.db
+        # Projection layer attributes
+        self.attributes = {
+            # Tensors
+            'W_proj': W, # Convolution weight
+            'b_proj': b, # Convolution bias
+            'x': h, # Input patches
+            'z_proj': None, # Convolution output
+            'd_Wproj': None, # Derivative of loss wrt convolution weight
+            'd_bproj': None, # Derivative of loss wrt bias
 
-    def forward(self, x):
+            # Hyperparameters
+            'embedding_size': embedding_size # The length of an embedding
+        }
+
+    def forward(self, h, proj_func):
         """
         Feed the convolution output Tensor through the linear projection layer
 
@@ -150,39 +186,50 @@ class ProjLayer(Layer):
             x (Tensor): The projection output Tensor
         """
         # First store a copy of the projection input Tensor
-        self.h = x.clone()
+        self.attr['h'] = h.clone()
 
         # Check if the projection layer's weight and bias have been initialized
-        #   If not, use the input's patch size and the projection layer's
-        #   embedding size to initialize the weight and bias
+        #   If not, use the projection input's patch size and the projection
+        #   layer's embedding size to initialize the weight and bias
         if self.W is None or self.b is None:
-            patch_size = x.shape[-1]
-            self.W = torch.randn(patch_size, self.embedding_size)
-            self.b = torch.randn(self.embedding_size)
+            patch_size = h.shape[-1]
+            self.W = torch.randn(patch_size, self.attr['embedding_size'])
+            self.b = torch.randn(self.attr['embeddings_size'])
 
         # Apply projection to the input Tensor
-        x = util.get_projection(x, self.W, self.b)
+        try:
+            proj_func = self.attr['proj_func']
+            proj_func_params = self.attr['proj_func_params']
+            z_proj = proj_func(h, proj_func_params)
+        except:
+            raise RuntimeError("Could not run projection!")
 
         # Store a copy of the projection output Tensor and return the original
-        self.z_proj = x.clone()
-        return x
+        self.attr['z_proj'] = z_proj.clone()
+        return z_proj
     
     def backward(self, d_zproj):
         """
-        Feed the derivative of the loss function wrt the projection output
+        Feed the derivative of the loss wrt the projection output
             backward through the linear projection layer, updating the
             derivatives of the loss function wrt both the projection weight
             and the projection bias
 
         Args:
-            d_zproj (Tensor): The derivative of the loss function
+            d_zproj (Tensor): The derivative of the loss
                 wrt the projection output
 
         Return:
-            The updated derivative of the loss function wrt the projection output
+            The updated derivative of the loss wrt the projection output
         """
-        self.dW = self.h.T @ d_zproj
-        self.db = d_zproj.sum(axis=
-                        tuple([i for i in d_zproj.shape
-                               if i != self.embeddings_dim]))
-        return d_zproj @ self.W.T
+        # Apply projection backward to the projection output gradient
+        try:
+            proj_func = self.attr['proj_func']
+            proj_func_params = self.attr['proj_func_params']
+            z_proj = proj_func(h, proj_func_params)
+        except:
+            raise RuntimeError("Could not run projection!")
+
+        # Store a copy of the projection output Tensor and return the original
+        self.attr['z_proj'] = z_proj.clone()
+        return z_proj

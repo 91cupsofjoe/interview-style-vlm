@@ -1,0 +1,217 @@
+{
+    "model settings" : {
+
+        "learning rate" : 1,
+
+        "number of epochs" : 1,
+
+        "convolution forward functions" : [
+
+            {
+                "name" : "convolution 2d",
+                "input tensor" : "x",
+                "params": [
+                    "W_conv", "b_conv",
+                    "stride", "padding"
+                ]
+            },
+
+            {
+                "name" : "ReLU",
+                "input tensor" : "z_conv",
+                "params" : []
+            }
+
+        ],
+
+        "convolution forward transformations" : [
+
+            {
+                "name" : "pool",
+                "input tensor" : "a_relu",
+                "params" : [
+                    "kernel_size",
+                    "stride",
+                    "pool_type"
+                ]
+            },
+
+            {
+                "name" : "flatten",
+                "input tensor" : "z_conv",
+                "params" : []
+            }
+
+        ],
+
+        "convolution backward functions" : [
+
+            {
+                "name" : "ReLU backward",
+                "input tensor" : "d_relu",
+                "params" : [
+                    "z_conv"
+                ]
+            },
+
+            {
+                "name": "convolution 2d backward",
+                "input tensor" : "d_zconv",
+                "params": [
+                    "x", "W_conv",
+                    "kernel_size", "stride", "padding"
+                ]
+            }
+
+        ],
+
+        "convolution backward transformations" : [
+
+            {
+                "name": "unflatten",
+                "input tensor" : "d_zproj",
+                "params": [
+                    "z_pool"
+                ]
+            },
+
+            {
+                "name": "pool backward",
+                "input tensor" : "d_pool",
+                "params": [
+                    "a_relu",
+                    "pool_type", "pool_size", "pool_stride"
+                ]
+            }
+
+        ],
+
+        "convolution layer attributes" : {
+
+            "tensors" : [
+                "W_conv",
+                "b_conv",
+                "x",
+                "z_conv",
+                "d_Wconv",
+                "d_bconv"
+            ],
+
+            "hyperparameters" : [
+                "num_channels",
+                "num_out_features",
+                "kernel_size",
+                "stride",
+                "padding",
+                "pool_size",
+                "pool_stride",
+                "pool_type"
+            ]
+
+        },
+
+        "convolution layers" : {
+
+            "0" : 
+            {
+                "seq_id" : 0,
+                "num_channels" : 3,
+                "num_out_features" : 64,
+                "kernel_size" : [3, 3],
+                "stride" : 1,
+                "padding" : 0,
+                "pool_size" : [2, 2],
+                "pool_stride" : 1,
+                "pool_type" : "max"
+            },
+
+            "1" : 
+            {
+                "seq_id" : 1,
+                "num_channels" : 64,
+                "num_out_features" : 128,
+                "kernel_size" : [3, 3],
+                "stride" : 1,
+                "padding" : 1,
+                "pool_size" : [4, 4],
+                "pool_stride" : 1,
+                "pool_type" : "average"
+            },
+
+            "2" : 
+            {
+                "seq_id" : 2,
+                "num_channels" : 128,
+                "num_out_features" : 256,
+                "kernel_size" : [5, 5],
+                "stride" : 2,
+                "padding" : 1,
+                "pool_size" : [8, 8],
+                "pool_stride" : 2,
+                "pool_type" : "max"
+            }
+        },
+
+        "projection forward functions" : [
+            {
+                "name" : "linear projection",
+                "input tensor" : "h",
+                "params": [
+                    "W_proj", "b_proj"
+                ]
+            }
+        ],
+
+        "projection forward transformations" : [],
+
+        "projection backward functions" : [
+            {
+                "name" : "linear projection backward",
+                "input tensor" : "d_loss",
+                "params": [
+                    "h", "W_proj"
+                ]
+            }
+        ],
+
+        "projection backward transformations" : [],
+
+        "projection layer attributes" : {
+
+            "tensors" : [
+                "W_proj",
+                "b_proj",
+                "h",
+                "z_proj",
+                "d_Wproj",
+                "d_bproj"
+            ],
+
+            "hyperparameters" : [
+                "embedding_size"
+            ]
+
+        },
+
+        "projection layers" : {
+
+            "0" :
+            {
+                "seq_id" : 0,
+                "embedding_size" : 512
+            },
+
+            "1" : 
+            {
+                "seq_id" : 1,
+                "embedding_size" : 512
+            },
+
+            "2" : 
+            {
+                "seq_id" : 2,
+                "embedding_size" : 512
+            }
+        }
+    }
+}

@@ -1,0 +1,152 @@
+def get_gradients(self,
+        x, z_conv, # W_conv and b_conv not used
+        h, W_proj, z_proj, # b_proj not used
+        true_labels
+    ):
+        """
+        Perform backpropagation to get the derivative of the loss w.r.t:
+            1. the convolution weight
+            2. the convolution bias
+            3. the projection weight
+            4. the projection bias
+
+        Args:
+            x (Tensor): the input patches
+            W_conv (Tensor): the convolution weight -- NOT USED
+            b_conv (Tensor): the convolution bias -- NOT USED
+            z_conv (Tensor): the convolution output
+            h (Tensor): the flattened convolution output = the projection input
+            W_proj (Tensor): the projection weight
+            b_proj (Tensor): the projection bias -- NOT USED
+            z_proj (Tensor): the projection output = the prediction
+            true_label (float): the true labels for the batch of images
+
+        Return:
+            grad_Wconv (Tensor): The gradient for the convolution weight
+            grad_bconv (Tensor): The gradient for the convolution bias
+            grad_Wproj (Tensor): The gradient for the projection weight
+            grad_bproj (Tensor): The gradient for the projection bias
+
+        Using d(x) = the derivative of x,
+            d(y)/d(x) = the derivative of y w.r.t. x
+            L = the loss function (we sum over the batch differences),
+            x = the convolution input (input patches matrix),
+            W_conv = the convolution weight,
+            b_conv = the convolution bias,
+            z_conv = the convolution output
+            h = z_flat = the flattened convolution output,
+            W_proj = the projection weight,
+            b_proj = the projection bias, and
+            z_proj = the projection output:
+
+        (1) d(L)/d(W_conv) = d(L)/d(z_conv) * d(z_conv)/d(W_conv)
+            a. To compute d(L)/d(z_conv), we backpropagate the gradient from the
+               projection layer to h, then reshape it back to the shape of z_conv.
+
+               i. First we unflatten d(L)/d(h). Then for d(L)/d(h), we backpropagate
+               through the linear layer, giving us
+               d(L)/d(h) = d(L)/d(z_proj) * (W_proj)^T. Then we have:
+
+                    d(L)/d(z_conv)
+                    = unflatten( d(L)/d(h) )
+                    = d(L)/d(z_conv)
+                    = unflatten( d(L)/d(z_proj) * (W_proj)^T )
+                    = reshape( d(L)/d(z_proj) * (W_proj)^T, shape(z_conv) )
+                    = reshape( d( (z_proj - y)^2 - lambda||W||^2 )/d(z_proj)
+                                  * (W_proj)^T, shape(z_conv) )
+                    = reshape( 2 * (z_proj - y) * (W_proj)^T, shape(z_conv) )
+
+                    *** d(L)/d(z_proj) = 2 * (z_proj - y) and not
+                    2/N * (z_proj - y) since we sum over batches for the loss
+                    (as opposed to getting the mean over batches for the loss).
+                    
+                ii. d(z_conv)/d(W_conv) = d(x * W_conv + b_conv)/d(W_conv) = x
+            
+            b. d(z_conv)/d(W_conv) = d(x * W_conv + b_conv)/d(W_conv) = x
+
+            c. Taking the results of a. and b., we get d(L)/d(W_conv)
+               = reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv)) * x
+               = x^T * reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv))
+               
+               (i) We move x in front of the reshape function. We do this not
+                  just to get the correct dimensions from the result of the matrix
+                  multiplication, but because the derivative of the loss
+                  w.r.t. to either of the weights describes the following: each
+                  W_conv[i,j] learns from how much of the input feature i was
+                  present times how much the output feature j was off by.
+
+            d. Therefore, the derivative of the loss w.r.t. the
+               convolution weight is equal to product between (i) the convolution
+               input = the input patches matrix, transposed, and (ii) the reshape
+               function (which takes in the result of both doubling the difference
+               between the prediction output and the target label AND then
+               multiplying that with the transpose of the projection weight, in
+               the shape of the convolution output)
+
+        (2) d(L)/d(b_conv) = d(L)/d(z_conv) * d(z_conv)/d(b_conv)
+            a. We already know that d(L)/d(z_conv)
+               = reshape( 2 * (z_proj - y) * (W_proj)^T, shape(z_conv) )
+
+            b. d(z_conv)/d(b_conv) = d(x * W_conv + b_conv)/d(b_conv) = 1
+
+            c. Taking the results of a. and b. we get d(L)/d(b_conv)
+               = reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv)) * 1
+               = reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv))
+
+            d. Therefore, the derivative of the loss w.r.t. the
+               convolution bias is simply the reshape function, which takes in
+               the result of both doubling the difference between the prediction
+               output and the target label AND then multiplying that with the
+               transpose of the projection weight, in the shape of the convolution
+               output
+
+        (3) d(L)/d(W_proj) = d(L)/d(z_proj) * d(z_proj)/d(W_proj)
+            a. From (1)a., we have d(L)/d(z_proj) = 2 * (z_proj - y)
+
+            b. d(z_proj)/d(W_proj) = d(h * W_proj + b_proj)d(W_proj) = h
+
+            c. Taking the results of a. and b., we get
+               d(L)/d(W_proj) = 2 * (z_proj - y) * h
+               = h^T * 2 * (z_proj - y)
+
+               i. Similar to (1)c.(i), we move h (= the flattened convolution
+                  output = the projection input) in front because each
+                  W_proj[i, j] learns from how much input feature i correlates
+                  to output error j.
+
+            d. Therefore, the derivative of the loss w.r.t. the
+               projection weight is the product of (i) the flattened convolution
+               input = the projection input, transposed, and (ii) twice the
+               difference between the projection output and the target label.
+
+        (4) d(L)/d(b_proj) = d(L)/d(z_proj) * d(z_proj)/d(b_proj)
+            a. We already know that d(L)/d(z_proj) = 2 * (z_proj - y)
+
+            b. d(z_proj)/d(b_proj) = d(x * W_proj + b_proj)/d(b_proj) = 1
+
+            c. Taking the results of a. and b., we get d(L)/d(b_conv)
+               = 2 * (z_proj - y) * 1 = 2 * (z_proj - y)
+
+            d. Therefore, the derivative of the loss w.r.t. the
+               projection bias is simply twice the difference between the
+               projection output and the target label.
+        """
+        # d(L)/d(z_proj) = 2 * (z_proj - y)
+        dL_dz_proj = 2 * (z_proj - true_labels)
+
+        # d(L)/d(W_conv) = x^T * reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv))
+        grad_Wconv = x.T @ (dL_dz_proj @ W_proj.T)
+        # d(L)/d(b_conv) = reshape(2 * (z_proj - y) * (W_proj)^T, shape(z_conv))
+        #   Sum over all patches to get a 1-d vector (same shape as conv bias)
+        unflatten = (dL_dz_proj @ W_proj.T).reshape(z_conv.shape)
+        grad_bconv = (unflatten).sum(dim=
+                        tuple([i for i in unflatten.shape if i != feature_dim]))
+        # d(L)/d(W_proj) = h^T * 2 * (z_proj - y)
+        grad_Wproj = h.T @ dL_dz_proj
+        # d(L)/d(b_proj) = 2 * (z_proj - y)
+        #   Sum over all patches to get a 1-d vector (same shape as proj bias)
+        grad_bproj = dL_dz_proj.sum(axis=
+                        tuple([i for i in dL_dz_proj.shape if i != embedding_dim]))
+
+        # Return the gradients
+        return grad_Wconv, grad_bconv, grad_Wproj, grad_bproj

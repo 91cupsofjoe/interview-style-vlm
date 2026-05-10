@@ -6,7 +6,7 @@ def get_ReLU(x):
     # ReLU activation function (per element e): max(e, 0)
     return torch.clamp(x, min=0)
 
-def get_projection(x, W, b):
+def get_linear_projection(x, W, b):
     return x @ W.T + b
 
 def softmax(x: torch.Tensor, dim: int):
