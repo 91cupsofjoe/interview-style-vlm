@@ -1,17 +1,21 @@
+"""
+This module handles loss calculation.
+"""
 import torch
 
-from util import util
+from tensor.activation import softmax
+
 
 def cross_entropy_loss(
-        predictions, true_labels, weights,
-        predictions_dim=0, lambda_=1e-4
-    ):
+    prediction, true_labels,
+    weights, reg_type='ridge', reg_strength=1e-4
+) -> float:
     """
     Calculate and return cross entropy loss based on predictions (projection
         output), true labels, and weights
 
     Args:
-        z_proj (Tensor): Tensor of predictions
+        prediction (Tensor): Tensor of predictions
         true_labels (Tensor): Tensor of true labels
         weights (list[Tensor]): List of weight Tensors
 
@@ -20,7 +24,7 @@ def cross_entropy_loss(
     """
     # First apply the softmax algorithm to the linear projection (logits)
     #   dim index 2 (3rd dim) = embedding size, each element repre
-    probs = util.softmax(predictions, dim=predictions_dim)
+    probs = softmax(prediction, 2)
     # Clamp the probabilities for stability
     probs = torch.clamp(probs, min=1e-9)
 
@@ -32,6 +36,9 @@ def cross_entropy_loss(
     for weight in weights:
         squared_l2_norm += (weight**2).sum()
 
-    return ce_loss + lambda_ * squared_l2_norm
-
+    # Check if using ridge regression
+    if reg_type == 'ridge':
+        return ce_loss + reg_strength * squared_l2_norm
     
+    # Else, using standard regularization
+    return ce_loss + reg_strength * squared_l2_norm

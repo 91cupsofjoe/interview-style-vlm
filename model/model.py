@@ -1,337 +1,392 @@
-from pydantic import BaseModel
+import torch
+from torch import Tensor
+from typing import Optional, Union, Callable, Any
 
-from model import layer as ly
-LEARNING_RATE = 1 # Default learning rate for the model
-NUM_EPOCHS = 1 # Default number of epochs
-# The rest of the hyperparameters for the model are defined in the layer module
+from data.dataset import DataSet
+from model import layer as lyr
+from log import logger as log
 
-class Model(BaseModel):
 
-    # Establish the valid hyperparameters for each of the layers
-    valid_conv_layer_args = {
-        'num channels', 'num out features',
-        'kernel size', 'stride', 'padding',
-    }
-    valid_proj_layer_args = {
-        'embedding size'
-    }
+# ================================= MODEL =====================================
 
-    # Establish the valid post-convolution function categories
-    valid_function_categories = {
-        'forward', 'loss', 'backward'
-    }
+LEARNING_RATE = 1 # Default learning rate
+NUM_EPOCHS = 100 # Default number of training epochs
+REG_PARAMS = ('ridge', 1.0) # Default regularization type and strength
+NUM_FOLDS = 5 # Default number of folds for crossvalidation
 
+default_model_hyperparams = {
+    'learning_rate': LEARNING_RATE,
+    'num_epochs': NUM_EPOCHS,
+    'reg_type': REG_PARAMS[0],
+    'reg_strength': REG_PARAMS[1],
+    'num_folds': NUM_FOLDS
+}
+
+class Model:
+    """
+    This is the base model class, which performs training and prediction.
+    """
     def __init__(self,
-        learning_rate=LEARNING_RATE,
-        num_epochs=NUM_EPOCHS,
-        conv_layers: dict = {},
-        proj_layers: dict = {},
-        functions = {
-            # The forward and backward passes each have a dict[str, tuples], where
-            #   each tuple has a function pointer and a list of parameter keys
-            'conv_forward': {},
-            'conv_backward': {},
-            'proj_forward': {},
-            'proj_backward': {},
-
-            # The loss and loss derivative functions entry values are only a single
-            #   tuple, each with a function pointer and a list of parameter keys
-            'loss': (),
-            'loss_derivative': ()
-        }
+        model_sequences: dict,
+        model_update_function: Callable,
+        model_loss_function: Optional[Callable],
+        model_hyperparams: Optional[dict[str, Any]],
+        object_name=None
     ):
-        self.attr = {
-            'learning_rate': learning_rate, # The learning rate of the model
-            'num_epochs': num_epochs # The number of training epochs to run
-        }
+        # Set the log id for the Model object
+        self.log_id = log.set_log_id(object_name)
 
-        # Read in a dict of convolution layer hyperparams to create one or more
-        #   convolution layers
-        self.conv_layers = {}
-        for conv_layer_params in conv_layers:
-            self.create_conv_layer(conv_layer_params)
+        # Set model hyperparameters
+        if model_hyperparams is None:
+            model_hyperparams = {}
 
-        # Do the same for projection layers and their hyperparameters
-        for proj_layer_params in proj_layers:
-            self.create_proj_layer(proj_layer_params)
-        self.proj_layers = {}
+        # Check for provided model hyperparameters
+        for key, value in default_model_hyperparams:
+            if key not in model_hyperparams:
+                model_hyperparams[key] = value
         
-        # Store list of functions to apply between convolution ans projection
-        self.functions = {}
-        # Check if functions are provided as a dictionary and parse accordingly
-        if isinstance(functions, dict):
-            for func_cat, _ in functions:
-                if func_cat in self.valid_function_categories:
-                    self.functions[func_cat] = functions[func_cat]
+        self.hyperparams = model_hyperparams
 
-    def __setfunc__(self, cat, func, params={}):
-        if cat in self.valid_function_categories:
-            self.functions[cat] = (func, params)
+        # Set the model loss and update functions
+        self.loss_function = model_loss_function
+        self.update_function = model_update_function
 
-    def create_conv_layer(self,
-        conv_layer_hyperparams: dict = {}
-    ):
+        # Create separate forward pass and backpropagation lists of sequences,
+        #   a unified dict of sequences, and a list of layers
+        self.forward_pass_seqs = []
+        self.backpropagation_seqs = []
+        self.sequences = {}
+        self.layers = []
+    
+        # Iterate through the list of sequences, adding sequences of layers
+        #   in the appropriate pass.
+        for seq_name, seq_params in model_sequences:
+            # Get the forward functions
+            forward_functions = None
+            if 'forward_functions' in seq_params:
+                forward_functions = seq_params['forward functions']
+
+            # Get the backward functions
+            backward_functions = None
+            if 'backward_functions' in seq_params:
+                backward_functions = seq_params['forward functions']
+
+            # Get the sequences layers
+            layer_params_sets = seq_params['layers']
+            sequence = []
+
+            # Iterate through sets of layer parameters to create the layers
+            for layer_params in layer_params_sets:
+                # Get layer type and set forward and backward functions
+                #   in the layer parameters
+                layer_type = ''
+                if 'layer_type' in layer_params:
+                    layer_type = layer_params.pop('layer_type')
+
+                layer_params['forward_functions'] = forward_functions
+                layer_params['backward_functions'] = backward_functions
+
+                # Add the layer to the model sequences dict and layers list
+                layer = lyr.get_layer(
+                    layer_type=layer_type,
+                    layer_parameters=layer_params
+                )
+
+                # Only append valid layers
+                if layer is not None:
+                    sequence.append(layer)
+                    self.layers.append(layer)
+
+            # For the forward pass, add the sequence to the front of the
+            #   forward pass sequence list and to the sequences dict
+            forward_seq_name = seq_name + '_forward'
+            forward_seq = sequence.copy()
+
+            self.forward_pass_seqs.append(forward_seq)
+            self.sequences[forward_seq_name] = forward_seq
+
+
+            # For backpropagation, add the sequence to the back of the
+            #   backpropagation sequence list and to the sequences dict
+            backward_seq_name = seq_name + '_backward'
+            backward_seq = sequence.reverse()
+
+            self.backpropagation_seqs.insert(0, backward_seq)
+            self.sequences[backward_seq_name] = backward_seq
+
+        # Initialize the dataset for the model
+        self.dataset: Optional[DataSet] = None
+
+    def set_dataset(self, dataset: DataSet):
         """
-        Create and store a convolution layer based on specified hyperparameters
+        Set the dataset for the model.
 
         Args:
-            conv_layer_hyperparams (dict): The dictionary of hyperparameters
+            dataset (DataSet): The dataset for the model
 
         Return:
             None
         """
-        # Set default sequence id for the convolution layer to be created
-        seq_id = len(conv_layer_hyperparams)
-        # If a sequence id is provided, use that for the, but check for
-        #   duplicate keys
-        if 'seq id' in conv_layer_hyperparams.keys():
-            temp_id = conv_layer_hyperparams['seq id']
-            if temp_id not in self.conv_layers.keys():
-                seq_id = temp_id
+        self.dataset = dataset
+
+    def train(self,
+        training_data=None,
+        training_examples=None, training_labels=None
+    ) -> tuple[Optional[float], Optional[Tensor]]:
+        """
+        Train the model on the given dataset, performing these steps:
+            forward pass --> loss calculation --> backpropagation
+                --> update learnable parameters
+
+        Args:
+            None
+
+        Return:
+            None
+        """
+        # If training data is provided as a single tensor, parse out the
+            # training examples and training labels
+        if training_data is not None:
+            training_examples = training_data[:-1]
+            training_labels = training_data[-1]
+
+        # If training examples and training labels are not provided, load them
+        #   from the model's dataset
+        if self.dataset is not None and \
+                        (training_examples is None or training_labels is None):
+            training_data = self.dataset.get_training_data(
+                sep_examples_labels=True
+            )
+            assert(isinstance(training_data, tuple))
+            training_examples, training_labels = training_data
         
-        # Add the convolution layer to the model
-        self.conv_layers[seq_id] = ly.ConvLayer(
-            {k: v for k, v in conv_layer_hyperparams.items()
-             if k in self.valid_conv_layer_args}
-        )
+        # Only run the training loop if training examples and training labels
+        #   are provided
+        if training_examples is not None and training_labels is not None:
 
-    def create_proj_layer(self,
-        proj_layer_hyperparams: dict = {}
-    ):
-        """
-        Create and store a linear projection layer based on specified hyperparameters
+            prediction = self.forward_pass(training_examples)
 
-        Args:
-            proj_layer_hyperparams (dict): The dictionary of hyperparameters
+            loss = self.calculate_loss(prediction, training_labels)
 
-        Return:
-            None
-        """
-        # Set default sequence id for the convolution layer to be created
-        seq_id = len(proj_layer_hyperparams)
-        # If a sequence id is provided, use that for the, but check for
-        #   duplicate keys
-        if 'seq id' in proj_layer_hyperparams.keys():
-            temp_id = proj_layer_hyperparams['seq id']
-            if temp_id not in self.conv_layers.keys():
-                seq_id = temp_id
+            x_grad = self.backpropagation(prediction)
 
-        # Add the projection layer to the model
-        self.proj_layers[seq_id] = ly.ProjLayer(
-            {k: v for k, v in proj_layer_hyperparams.items()
-             if k in self.valid_proj_layer_args}
-        )
+            self.update_learnable_parameters()
 
-    def forward(self, x):
-        """
-        Feed input patches through convolution layers and projection layers to
-            calculate the final projection output
-
-        Args:
-            x (Tensor): input patches
-
-        Return:
-            None
-        """
-        # Run the sequence of convolution layers on the input patches
-        #   to get the convolution output
-        for conv_layer in self.conv_layers:
-            x = conv_layer.forward(x)
-
-        # Get the last convolution layer
-        last_conv_layer = self.conv_layers[len(self.conv_layers) - 1]
-
-        # Articulate forward pass functions and respective parameters to be
-        #   applied to the convolution output Tensor before linear projection
-        flatten = ('flatten', {})
-        relu_forward = ('relu_forward', {})
-        pool_forward = ('pool_forward', {
-            'kernel_size': self.attr['pool_size'],
-            'pool_stride': self.attr['pool_stride'],
-            'pool_type': self.attr['pool_type']
-        })
-
-        # Apply the forward pass functions to the convolution output Tensor
-        h = self.apply_pass_functions(
-            x=x,
-            layer=last_conv_layer,
-            direction='forward',
-            functions_list=[
-                flatten,
-                relu_forward,
-                pool_forward
-            ]
-        )
-
-        # Run the sequence of projection layers on the convolution output
-        #   to get the projection output
-        for proj_layer in self.proj_layers:
-            h = proj_layer.forward(h)
-
-    def get_loss(self,
-        predictions, true_labels
-    ):
-        """
-        Calculate a scalar value (loss) representing how off model predictions
-            are from their respective true labels
-
-        Args:
-            predictions (Tensor): predictions Tensor
-            true_labels (Tensor): true Labels Tensor
-            predictions_dim (int): Dimension along the predictions Tensor
-                containing the logits
-        """
-        # First get the list of weights from all the layers
-        weights = [
-            weight for weight, _ in
-                [layer for _, layer in
-                    [set(self.conv_layers.items()).union(
-                        set(self.proj_layers.items()))
-                    ]
-                ]
-            ]
+            # Return the scalar loss value and the input patches gradient
+            #   NOTE: For debugging
+            return loss, x_grad
         
-        # Create the parameters for the model's loss function
+        # Else, return None for the loss calculation and the input patches gradient
+        return None, None
 
-        # Return the result from the model's loss function
-        # First check that the loss function is set
-        try:
-            return self.functions['loss'](predictions, true_labels, weights)
-        except:
-            raise RuntimeError(f"'No loss derivative function set!"
-                               f"Update the models loss")
+    # ----------------------- MODEL TRAINING METHODS --------------------------
 
-    def backprop(self, predictions, true_labels):
+    def forward_pass(self, x: Tensor):
         """
-        Move backward from the loss function to the projection and convolution
-            layers to determine how each weight and bias contributed to the total
-            prediction error, calculating the respective gradients
+        Perform the forward pass on the input patches tensor to get the output
+            prediction tensor
 
         Args:
-            predictions (Tensor): The predictions Tensor
-            true_labels (Tensor): The true labels Tensor
+            x (Tensor): The input patches tensor
 
         Return:
-            None
+            The output prediction tensor
         """
-        # First get the derivative of the loss wrt to the projection
-        #   output using the model's loss derivative function
-        # Raise error if the loss function isn't set
-        try:
-            d_zproj = self.functions['loss derivative'](predictions, true_labels)
-        except:
-            raise RuntimeError(f"'No loss derivative function set!"
-                               f"Update the models loss")
+        # Iterate through the forward pass sequences
+        for seq in self.forward_pass_seqs:
+            # Iterate through the layers in the sequences to update the
+            #   input tensor
+            for layer in seq:
+                x = layer.forward(x)
 
-        # Iterate through the projection layers to update the derivative of the
-        #   loss function wrt to the projection output
-        for i in range(len(self.proj_layers) - 1, -1, -1):
-            proj_layer = self.proj_layers[i]
-            d_zproj = proj_layer.backward(d_zproj)
-
-        # Get the last convolution layer
-        last_conv_layer = self.conv_layers[len(self.conv_layers) - 1]
-
-        # Articulate backpropagation functions and respective parameters to be
-        #   applied to the derivative of the loss wrt the projection output
-        unflatten = ('unflatten', {
-            'layer_params': ['z_conv']
-        })
-        relu_backward = ('relu_backward', {
-            'layer_params': ['z_conv']
-        })
-        pool_backward = ('pool_backward', {
-            'layer_params':
-                ['a_relu', 'pool_type', 'pool_size', 'pool_stride']
-        })
-
-        # Apply the backpropagation functions to the derivative of the loss wrt
-        #   to the convolution output
-        d_zconv = self.apply_pass_functions(
-            x=d_zproj,
-            layer=last_conv_layer,
-            direction='forward',
-            functions_list=[
-                unflatten,
-                relu_backward,
-                pool_backward
-            ]
-        )
-
-        # Iterate through the convolution layers to update the derivative of
-        #   the loss function wrt to the convolution output
-        for i in range(len(self.conv_layers) - 1, -1, -1):
-            conv_layer = self.conv_layers[i]
-            d_zconv = conv_layer.backward(d_zconv)
-
-    def update(self):
-        """
-        For each layer, update the weight matrix and bias vector based on the
-            layer's gradients and model hyperparameters
-
-        Args:
-            None
-
-        Return:
-            None
-        """
-        # Iterate through the convolution layers, updating each layer's
-        #   convolution weight and bias
-        learning_rate = self.attr['learning_rate']
-        for conv_layer in self.conv_layers:
-            W_new = conv_layer.__get__('W_conv') \
-                - learning_rate * conv_layer.__get__('d_Wconv')
-            conv_layer.__set__('W_conv', W_new)
-
-            b_new = conv_layer.__get__('b_conv') \
-                 - learning_rate * conv_layer.__get__('d_bconv')
-            conv_layer.__set__('b_conv', b_new)
-            
-        # Do the same for the projection layers
-        for proj_layer in self.proj_layers:
-            W_new = proj_layer.__get__('W_proj') \
-                - learning_rate * proj_layer.__get__('d_Wproj')
-            proj_layer.__set__('W_proj', W_new)
-            
-            b_new = proj_layer.__get__('b_proj') \
-                 - learning_rate * proj_layer.__get__('d_bproj')
-            proj_layer.__set__('b_proj', b_new)
-
-    # ========================== HELPER FUNCTIONS =============================
-
-    def apply_pass_functions(self, x, layer,
-                    direction='forward', functions_list=None):
-        """
-        Apply forward or backpropagation function(s) to an input Tensor
-
-        Args:
-            x (Tensor): The input Tensor
-            category (str): The direction of the pass
-            func_names_params (list[ tuple[ str, dict[str, any] ] ]): A list of
-                tuples = (function name, parameter dictionary)
-
-        Return:
-            The transformed input Tensor
-        """
-        if not functions_list:
-            functions_list = []
-
-        # Iterate through function entries, each =
-        #   tuple(function pointer, function parameter keys)
-        for func_name, func_params in functions_list:
-            # Get function from function name but firs check that it exists
-            #   as a function for the specified pass direction
-            if func_name in self.functions[direction]:
-                function = self.functions[direction][func_name]
-
-                # If there are layer params, get layer attributes
-                if 'layer_params' in func_params:
-                    layer_params = func_params['layer_params']
-                    for layer_key in layer_params:
-                        func_params[layer_key] = layer.__get__(layer_key)
-
-                # Apply the function with the params to the input Tensor
-                x = function(x, func_params)
-
-        # Return the transformed input Tensor
+        # Return the output prediction tensor
         return x
+    
+    def calculate_loss(self,
+        prediction: Tensor, target_labels: Tensor
+    ) -> Optional[float]:
+        """
+        Calculate the loss between the output prediction and target labels
+
+        Args:
+            prediction (Tensor): The output prediction tensor
+            target_labels (Tensor): The target labels tensor
+
+        Return:
+            The loss function output
+        """
+        # Check that the loss function was set
+        if self.loss_function is None:
+            # Log error and return None since the loss function was not set
+            log.log_error(
+                "Could not calculate loss since the loss function was not set!",
+                self.log_id
+            )
+            return None
+        
+        # Return the loss calculation from the prediction and target_labels
+        return self.loss_function(prediction, target_labels, self.hyperparams)
+    
+    def backpropagation(self, x_grad: Tensor):
+        """
+        Perform backpropagation on the output prediction tensor to get the
+            various loss gradients, returning the gradient of the loss wrt the
+            input patches
+
+        Args:
+            x (Tensor): The output prediction tensor
+
+        Return:
+            The input patches gradient tensor
+        """
+        # Iterate through the backpropagation sequences
+        for seq in self.backpropagation_seqs:
+            # Iterate through the layers in the sequences to update the
+            #   input gradient tensor
+            for layer in seq:
+                x_grad = layer.backward(x_grad)
+
+        # Return the input gradient tensor
+        return x_grad
+    
+    def update_learnable_parameters(self):
+        """
+        Iterate through all of the layers in the model, updating each layer's
+            learning parameters with the layer's gradients, using the model's
+            update function
+        """
+        # Check that the update function was set
+        if self.update_function is None:
+            # Log error and return None since the update function was not set
+            log.log_error(
+                f"Could not update learnable parameters since the update "
+                f"function was not set!",
+                self.log_id
+            )
+
+        assert(self.update_function)
+        # Iterate through the model's layers
+        for layer in self.layers:
+            #Iterate through each learnable parameter in the layer
+            for learnable_parameter, gradient in layer.learnable_parameter_pairs:
+                # Update the learnable parameter using the gradient
+                self.update_function(
+                    learnable_parameter, gradient, self.hyperparams
+                )
+
+
+# =========================== TRANSFORMER MODEL ===============================
+
+NUM_INPUT_TOKENS = 20 # Default number of input tokens
+NUM_OUTPUT_CLASSES = 64 # Default number of output classes
+NUM_ATTN_HEADS = 4 # Default number of attention heads
+DROPOUT = 0.1 # Default dropout value
+
+class Transformer(Model):
+    """
+    This is the transformer class, which applys attention and masking to its
+        encoder (training) and decoder (prediction) blocks.
+    """
+    def __init__(self,
+        model_sequences: dict[str, Any],
+        model_update_function: Callable,
+        model_loss_function=None, 
+        num_input_tokens=NUM_INPUT_TOKENS, num_output_classes=NUM_OUTPUT_CLASSES,
+        num_attn_heads=NUM_ATTN_HEADS, dropout=DROPOUT,
+        object_name=None
+    ):
+        # Set logger id for the Transformer object
+        self.log_id = log.set_log_id(object_name)
+        
+        # Get the transformer hyperparameters
+        model_hyperparams = {
+            'num_input_tokens': num_input_tokens,
+            'num_output_classes': num_output_classes,
+            'num_attn_heads': num_attn_heads,
+            'dropout': dropout
+        }
+
+        # Initialize the transformer model
+        super().__init__(
+            model_sequences=model_sequences,
+            model_loss_function=model_loss_function,
+            model_update_function=model_update_function,
+            model_hyperparams=model_hyperparams
+        )
+
+    def encode(self, input):
+        """
+        Encode the input Tensor by feeding it through the encoder sequence
+
+        Args:
+            input (Tensor): The Tensor to be encoded
+
+        Return:
+            The encoded Tensor
+        """
+        for encoder in self.sequences['encoder_forward']:
+            input = encoder.forward(input)
+
+        return input
+    
+    def decode(self, input):
+        """
+        Decode the input Tensor by feeding it through the decoder sequence
+
+        Args:
+            input (Tensor): The Tensor to be decoded
+
+        Return:
+            The decoded Tensor
+        """
+        for decoder in self.sequences['decoder_forward']:
+            input = decoder.forward(input)
+
+        return input
+    
+    
+# ======================== CONVOLUTION NEURAL NETWORK =========================
+
+BATCH_SIZE = 32 # Default number of input examples for the input patches
+
+class CNN(Model):
+    """
+    This is the convolution neural network class, which applies convolution
+        and linear projection to an input to produce a prediction.
+    """
+    def __init__(self,
+        model_sequences: dict[str, Any],
+        model_update_function: Callable,
+        model_loss_function=None,
+        batch_size=BATCH_SIZE,
+        object_name=None
+    ):
+        # Set the logger id for the CNN
+        # Set the logger id for the Model object
+        self.log_id = log.set_log_id(object_name)
+
+        # Get the transformer hyperparameters
+        model_hyperparams = {
+            'batch_size': batch_size
+        }
+
+        # Initialize the CNN model
+        super().__init__(
+            model_sequences=model_sequences,
+            model_update_function=model_update_function,
+            model_loss_function=model_loss_function,
+            model_hyperparams=model_hyperparams,
+            object_name=object_name
+        )
+
+    def encode(self, input_patches: Tensor):
+        """
+        Encode the input patches tensor to the convolution output tensor
+
+        Args:
+            input_patches (Tensor): The input patches tensor
+
+        Return:
+            The convolution output tensor
+        """
+        return self.forward_pass(input_patches)

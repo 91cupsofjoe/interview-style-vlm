@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as nnf
 from torchvision import transforms
 
-from dataset import dataset as ds
+from data import dataset as ds
 from model import model as ml
 from model import image_encoder as ie
 
@@ -162,19 +162,28 @@ class ImageLearner():
 # =========================== HELPER FUNCTIONS ================================
 
 function_name_to_pointer = {
-    # Convolution layer forward functions
+    # Convolution layer forward pass functions
     'convolution 2d': ie.conv2d,
     'ReLU activation': ie.relu,
-    'pool': ie.pool,
-    'flatten': ie.flatten,
-    # Convolution layer backward functions
-    'unflatten': ie.unflatten,
-    'pool backward': ie.pool_backward,
+
+    # Convolution layer backpropagation functions
     'ReLU activation backward': ie.relu_backward,
     'convolution 2d backward': ie.conv2d_backward,
+
     # Projection layer forward functions
     'linear projection': ie.lin_proj,
-    'linear projection backward': ie.lin_proj_backward
+    'linear projection backward': ie.lin_proj_backward,
+    
+    # Forward pass transformation functions
+    'pool': ie.pool,
+    'flatten': ie.flatten,
+
+    # Backpropagation transformation functions
+    'unflatten': ie.unflatten,
+    'pool backward': ie.pool_backward
+
+    # Loss functions
+    'loss' : ie.get_cross_entropy_loss
 }
 
 def get_function(function_name: str):

@@ -5,87 +5,6 @@
 
         "number of epochs" : 1,
 
-        "convolution forward functions" : [
-
-            {
-                "name" : "convolution 2d",
-                "input tensor" : "x",
-                "params": [
-                    "W_conv", "b_conv",
-                    "stride", "padding"
-                ]
-            },
-
-            {
-                "name" : "ReLU",
-                "input tensor" : "z_conv",
-                "params" : []
-            }
-
-        ],
-
-        "convolution forward transformations" : [
-
-            {
-                "name" : "pool",
-                "input tensor" : "a_relu",
-                "params" : [
-                    "kernel_size",
-                    "stride",
-                    "pool_type"
-                ]
-            },
-
-            {
-                "name" : "flatten",
-                "input tensor" : "z_conv",
-                "params" : []
-            }
-
-        ],
-
-        "convolution backward functions" : [
-
-            {
-                "name" : "ReLU backward",
-                "input tensor" : "d_relu",
-                "params" : [
-                    "z_conv"
-                ]
-            },
-
-            {
-                "name": "convolution 2d backward",
-                "input tensor" : "d_zconv",
-                "params": [
-                    "x", "W_conv",
-                    "kernel_size", "stride", "padding"
-                ]
-            }
-
-        ],
-
-        "convolution backward transformations" : [
-
-            {
-                "name": "unflatten",
-                "input tensor" : "d_zproj",
-                "params": [
-                    "z_pool"
-                ]
-            },
-
-            {
-                "name": "pool backward",
-                "input tensor" : "d_pool",
-                "params": [
-                    "a_relu",
-                    "pool_type", "pool_size", "pool_stride"
-                ]
-            }
-
-        ],
-
         "convolution layer attributes" : {
 
             "tensors" : [
@@ -152,30 +71,6 @@
             }
         },
 
-        "projection forward functions" : [
-            {
-                "name" : "linear projection",
-                "input tensor" : "h",
-                "params": [
-                    "W_proj", "b_proj"
-                ]
-            }
-        ],
-
-        "projection forward transformations" : [],
-
-        "projection backward functions" : [
-            {
-                "name" : "linear projection backward",
-                "input tensor" : "d_loss",
-                "params": [
-                    "h", "W_proj"
-                ]
-            }
-        ],
-
-        "projection backward transformations" : [],
-
         "projection layer attributes" : {
 
             "tensors" : [
@@ -212,6 +107,117 @@
                 "seq_id" : 2,
                 "embedding_size" : 512
             }
+        },
+
+        "convolution forward pass functions" : [
+
+            {
+                "name" : "convolution 2d",
+                "input tensor" : "x",
+                "params": [
+                    "W_conv", "b_conv",
+                    "stride", "padding"
+                ]
+            },
+
+            {
+                "name" : "ReLU",
+                "input tensor" : "z_conv",
+                "params" : []
+            }
+
+        ],
+
+        "convolution backpropagation functions" : [
+
+            {
+                "name" : "ReLU backward",
+                "input tensor" : "d_relu",
+                "params" : [
+                    "z_conv"
+                ]
+            },
+
+            {
+                "name": "convolution 2d backward",
+                "input tensor" : "d_zconv",
+                "params": [
+                    "x", "W_conv",
+                    "kernel_size", "stride", "padding"
+                ]
+            }
+
+        ],
+
+        "forward pass transformations" : [
+
+            {
+                "name" : "pool",
+                "input tensor" : "a_relu",
+                "params" : [
+                    "kernel_size",
+                    "stride",
+                    "pool_type"
+                ]
+            },
+
+            {
+                "name" : "flatten",
+                "input tensor" : "z_conv",
+                "params" : []
+            }
+
+        ],
+
+        "backpropagation transformations" : [
+
+            {
+                "name": "unflatten",
+                "input tensor" : "d_zproj",
+                "params": [
+                    "z_pool"
+                ]
+            },
+
+            {
+                "name": "pool backward",
+                "input tensor" : "d_pool",
+                "params": [
+                    "a_relu",
+                    "pool_type", "pool_size", "pool_stride"
+                ]
+            }
+
+        ],
+
+        "projection forward functions" : [
+            {
+                "name" : "linear projection",
+                "input tensor" : "h",
+                "params": [
+                    "W_proj", "b_proj"
+                ]
+            }
+        ],
+
+        "projection backpropagation functions" : [
+            {
+                "name" : "linear projection backward",
+                "input tensor" : "d_loss",
+                "params": [
+                    "h", "W_proj"
+                ]
+            }
+        ],
+
+        "loss forward function" : {
+            "name" : "cross entropy loss",
+            "input tensor" : "prediction",
+            "regulariztion type" : "ridge",
+            "regularization value" : 0.1,
+            "params" : [
+                "target_labels"
+            ]
         }
     }
 }
