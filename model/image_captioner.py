@@ -3,172 +3,130 @@ This module is for the image captioner model. It comprises of two submodules,
     an image encoder (CNN) and caption decoder (transformer). The image captioner
     model takes in an image and predicts the caption for it.
 """
-from typing import Any
+from typing import Optional
 
-from model.model import CNN, Transformer
-from data.dataset import DataSet, ImageCaptionDataSet, TextScorerDataSet
+from function import \
+    attention as attn, convolution as conv, \
+    pool, regularization as reg, \
+    update
+from model import model as ml
+from model.image_encoder import ImageEncoder
+from model.caption_decoder import CaptionDecoder
+from log import logger as log
 
-from log import logger as lg
 
+IMAGE_ENCODER_DATA_FILENAME = 'image_captioner_image_encoder_data.pt'
+CAPTION_DECODER_DATA_FILENAME = 'image_captioner_caption_decoder_data.pt'
 
-class ComplexModel:
-    """
-    This is the base complex model class, which utilizes multiple submodels for
-        its training and prediction operations.
-    """
+class ImageCaptioner:
     def __init__(self,
-        logger_name=None,
-        dataset=None,
-        submodels=None,
-        forward_pass_functions=None,
-        backpropagation_functions=None,
-        loss_function=None,
-        update_function=None
+        # Input files
+        images_filename: Optional[str]=None,
+        context_vectors_filename: Optional[str]=None,
+        captions_filename: Optional[str]=None,
+
+        # Base model hyperparameters
+        batch_size=ml.BATCH_SIZE,
+        num_folds=ml.NUM_FOLDS,
+        num_epochs=ml.NUM_EPOCHS,
+        learning_rate=update.LEARNING_RATE,
+        reg_type=reg.REG_TYPE, reg_strength=reg.REG_STRENGTH,
+        training_test_split=0.6,
+
+        # CNN model hyperparameters
+        num_encoder_in_channels=ml.NUM_IN_CHANNELS,
+        num_encoder_out_features=ml.NUM_OUT_CLASSES,
+        kernel_size=conv.KERNEL_SIZE,
+        stride=conv.STRIDE, padding=conv.PADDING,
+        pool_size=pool.KERNEL_SIZE,
+        pool_stride=pool.STRIDE, pool_type=pool.POOL_TYPE,
+
+        # Transformer model hyperparameters
+        num_transformer_in_tokens=ml.NUM_IN_TOKENS,
+        num_transformer_out_classes=ml.NUM_OUT_CLASSES,
+        num_attn_heads=attn.NUM_ATTN_HEADS,
+        dropout=reg.DROPOUT,
+
+        # Model data files
+        image_encoder_data_filename=IMAGE_ENCODER_DATA_FILENAME,
+        load_image_encoder_data=False,
+        caption_decoder_data_filename=CAPTION_DECODER_DATA_FILENAME,
+        load_caption_decoder_data=False,
+
+        # General parameters
+        object_name: Optional[str]=None
     ):
-        # Set the logger ID for the ComplexModel
-        if logger_name is None:
-            logger_name = "COMPLEX_MODEL"
-        self.log_id = lg.set_log_id(logger_name)
+        # Set the log id for the image encoder
+        self.log_id = log.set_log_id(object_name, log.IMAGECAPTIONER)
 
-        # Set the dataset for the complex model
-        if dataset is None:
-            dataset = DataSet()
-        self.dataset = dataset
+        # If not loading the image encoder data, set the filename to None
+        if not load_image_encoder_data:
+            image_encoder_data_filename = None
 
-        # Set the submodels for the complex model
-        if submodels is None:
-            submodels = {}
-        self.submodels = submodels
+        # If not loading the caption decoder data, set the filename to None
+        if not load_caption_decoder_data:
+            caption_decoder_data_filename = None
 
-        # Set the forward pass functions for the complex model
-        if forward_pass_functions is None:
-            forward_pass_functions = []
-        self.forward_pass_functions = forward_pass_functions
+        # Store the base model hyperparameters
+        base_model_hyperparameters = {
+            'num_folds': num_folds,
+            'batch_size': batch_size,
+            'num_epochs': num_epochs,
+            'learning_rate': learning_rate,
+            'reg_type': reg_type,
+            'reg_strength': reg_strength,
+        }
 
-        # Set the backpropagation functions for the complex model
-        if backpropagation_functions is None:
-            backpropagation_functions = []
-        self.backpropagation_functions = backpropagation_functions
+        cnn_model_hyperparameters = {
+            'num_in_channels': num_encoder_in_channels,
+            'num_out_features': num_encoder_out_features,
+            'kernel_size': kernel_size,
+            'stride': stride,
+            'padding': padding,
+            'pool_size': pool_size,
+            'pool_stride': pool_stride,
+            'pool_type': pool_type,
+        }
 
-        # Set the loss and update functions
-        self.loss_function = loss_function
-        self.update_function = update_function
+        transformer_model_hyperparameters = {
+            'num_in_tokens': num_transformer_in_tokens,
+            'num_out_classes': num_transformer_out_classes,
+            'num_attn_heads': num_attn_heads,
+            'dropout': dropout
+        }
 
-
-    def load_dataset(self, data_sources: tuple[Any]) -> bool:
-        """
-        Load data from the data sources into the dataset.
-
-        Args:
-            data (tuple[Any]): Tuple containing data sources
-
-        Return:
-            Boolean to indicate if loading the dataset was successful
-        """
-        # Load the training examples and training labels
-        if not self.dataset.load_training_data(data_sources=data_sources):
-            # Log error and return False since loading the training data failed
-            lg.log_error(
-                f"Could not load the dataset since loading training examples ",
-                f"and training labels failed!",
-                self.log_id
-            )
-            return False
-
-        # Load the data tensor from the training examples and training labels
-        if not self.dataset.load_data_tensor():
-            # Log error and return False since loading the data tensor failed
-            lg.log_error(
-                "Could not load the dataset since loading the data tensor failed!",
-                self.log_id
-            )
-            return False
-        
-        # Successfully loaded the training data and data tensor, return True
-        return True
-    
-
-    def train(self, data_tensor=None):
-        """
-        Train the complex model on the training data tensor provided. If no
-            training data is provided, use preloaded data from the dataset.
-
-        Args:
-            data (tuple[Any]): The data to train the complex model on
-
-        Return:
-            The calculated loss and final derivative of the input patches
-        """
-        if data_tensor is not None:
-
-    
-
-class ImageCaptioner(ComplexModel):
-    def __init__(self,
-        images_filename=None, captions_filename=None, corpus_filename=None
-    ):
-        # Dataset for images and captions
-        self.dataset = ImageCaptionDataSet(
+        # Set submodels for image encoding and caption decoding
+        self.image_encoder = ImageEncoder(
+            **cnn_model_hyperparameters,
+            base_model_hyperparameters=base_model_hyperparameters,
             images_filename=images_filename,
+            context_vectors_filename=context_vectors_filename,
+            training_test_split=training_test_split,
+            model_data_filename=image_encoder_data_filename,
+            object_name='image_encoder'
+        )
+
+        self.caption_decoder = CaptionDecoder(
+            **transformer_model_hyperparameters,
+            base_model_hyperparameters=base_model_hyperparameters,
             captions_filename=captions_filename,
-            corpus_filename=corpus_filename
+            training_test_split=training_test_split,
+            model_data_filename=caption_decoder_data_filename,
+            object_name='caption_decoder'
         )
 
-        # Submodels for image encoding and caption predictions
-        self.image_encoder = CNN(
-            model_sequences={},
-            model_loss_function=None,
-            model_update_function=None
-        )
-        self.caption_decoder = Transformer(
-            model_sequences={},
-            model_loss_function=None,
-            model_update_function=None
+        # Pretrain the image encoder
+        self.image_encoder.train(
+            use_patience=True,
+            do_measure_accuracy=True,
+            do_print_messages=True
         )
 
-        super().__init__(
-            
-        )
-
-    def train(self, images_filename=None, captions_filename=None) -> bool:
         """
-        Train the image captioner model on the given images and captions. If no data
-            if provided, use the preloaded data from the dataset.
-
-        Args:
-            images_filename (str): Filename of file with the image filepaths
-            captions_filename (str): Filename of file with the image captions
-
-        Return:
-            Boolean to indicate if model training was successful
+        # Pretrain the caption decoder
+        self.caption_decoder.train(
+            use_patience=True,
+            do_measure_accuracy=True,
+            do_print_messages=True
+        )
         """
-        trained_image_captioner_model = False
-
-        # Update dataset images and captions if applicable
-        if images_filename is not None and captions_filename is not None:
-            self.dataset.set_data(
-                images_filename=images_filename,
-                captions_filename=captions_filename
-            )
-
-        # Get the preprocessed images
-        try:
-            preprocessed_images = self.dataset.get_preprocessed_images()
-        except:
-            lg.log_error(
-                "Couldn't get the preprocessed images!", self.log_id)
-
-        # Encode the preprocessed images
-        try:
-            encoded_images = self.image_encoder.encode(
-                            input_patches=preprocessed_images)
-        except:
-            lg.log_error(
-                "Couldn't encode the preprocessed images!", self.log_id)
-
-        # Decode the preprocessed images
-        try:
-            caption_predictions = self.caption_decoder.decode(encoded_images)
-        except:
-            lg.log_error(
-                "Couldn't decode the encoded images!", self.log_id)

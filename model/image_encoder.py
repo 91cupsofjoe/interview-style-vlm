@@ -1,31 +1,73 @@
-from typing import Optional
-import math
-from pydantic import BaseModel
+"""
+This module is for the image encoder class.
+"""
+from typing import Optional, Any
+from collections.abc import Callable
+from pathlib import Path
 
 import torch
-from torch import Tensor, Size
-import torch.nn.functional as nnf
+from torch import Tensor
 
-from tensor import tensor_ops
+from data.dataset import ImageDataSet
 from model.model import CNN
+from function import image
 from log import logger as log
 
 
-class ImageEncoder(BaseModel, CNN):
+RESIZE = 256 # Default image resizing dimension
+CROP_SIZE = 224 # Default image cropping dimension
+
+class ImageEncoder(CNN):
     """
     Class for the image encoder model (convolution neural network).
     """
-    def __init__(self):
+    def __init__(self,
+        cnn_model_hyperparameters: Optional[dict[str, Any]]=None,
+        base_model_hyperparameters: Optional[dict[str, Any]]=None,
+        image_dataset: Optional[ImageDataSet]=None,
+        images_filename: Optional[str]=None,
+        context_vectors_filename: Optional[str]=None,
+        training_test_split=-1.0,
+        model_data_filename: Optional[str]=None,
+        object_name: Optional[str]=None
+    ):
+        # Set the log id for the image encoder
+        self.log_id = log.set_log_id(object_name, log.IMAGEENCODER)
+
         # Initialize the preprocessor
         self.preprocessor = None
-        pass
 
-    def __len__(self):
-        return
+        # Initialize the image encoder image dataset if not provided
+        if image_dataset is None:
+            image_dataset = ImageDataSet()
+        
+        # Load images and context vectors if provided
+        if images_filename is not None \
+                        and context_vectors_filename is not None:
+            image_dataset.load_data(
+                data_sources=(images_filename, context_vectors_filename),
+                labels_data_name='context_vectors',
+                labels_data_tensor_function_name='get_tokens_tensor',
+                training_test_split=training_test_split
+            )
+
+        # Initialize the CNN model hyperparameters if not provided
+        if cnn_model_hyperparameters is None:
+            cnn_model_hyperparameters = {}
+
+        # Initialize the CNN architecture
+        super().__init__(
+            **cnn_model_hyperparameters,
+            base_model_hyperparameters=base_model_hyperparameters,
+            dataset=image_dataset,
+            model_data_filename=model_data_filename,
+            object_name=object_name, has_log_id=True
+        )
 
     def get_preprocessed_image(self,
         image_filepath: str,
-        preprocess_params: Optional[dict]=None,
+        resize: Optional[int]=RESIZE,
+        crop_size: Optional[int]=CROP_SIZE
     ) -> Optional[Tensor]:
         """
         Preprocess and return a transformed image tensor.
@@ -39,11 +81,13 @@ class ImageEncoder(BaseModel, CNN):
         """
         # Set the preprocesser if preprocessing parameters are provided
         #   or if the preprocesser hasn't been initialized
-        if self.preprocessor is None or preprocess_params is not None:
-            self.preprocessor = tensor_ops.get_preprocessor(preprocess_params)
+        if self.preprocessor is None:
+            self.preprocessor = image.get_preprocessor(
+                resize=resize, crop_size=crop_size
+            )
 
         # Open the image and convert it to a tensor
-        image_tensor = tensor_ops.get_image_tensor(image_filepath)
+        image_tensor = image.get_image_tensor(image_filepath)
 
         # Check if loading the image tensor was successful
         if image_tensor is not None:
@@ -58,7 +102,8 @@ class ImageEncoder(BaseModel, CNN):
         
     def get_preprocessed_images(self,
         image_filepaths: list[str],
-        preprocess_params=None,
+        resize: Optional[int]=None,
+        crop_size: Optional[int]=None
     ) -> Optional[Tensor]:
         """
         Preprocess and return a batch of transformed image tensors from the
@@ -80,7 +125,8 @@ class ImageEncoder(BaseModel, CNN):
                     in [
                         self.get_preprocessed_image(
                             image_filepath=image_filepath,
-                            preprocess_params=preprocess_params
+                            resize=resize,
+                            crop_size=crop_size
                         )
                         for image_filepath in image_filepaths
                     ] if tensor is not None

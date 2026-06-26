@@ -1,8 +1,14 @@
-from typing import Union, Optional, Callable, Any
+from typing import Union, Optional, Any
+from collections.abc import Callable
 
 import torch
 from torch import Tensor, Size
 
+from function import attention as attn, convolution as conv, pool, \
+    regularization as reg
+from function.tensor_function import get_tensor_function
+from model import model as ml
+from log import logger as log
 
 # ================================== LAYER ====================================
 
@@ -12,275 +18,193 @@ class Layer:
         learnable parameters, and both forward and backward function sets.
     """
     def __init__(self, 
-        static_parameters: Optional[dict[str, Any]],
-        learnable_parameters: Optional[dict[str, Tensor]],
-        forward_func_ptrs: Optional[list[Callable]],
-        backward_func_ptrs: Optional[list[Callable]]
-    ):
-        # Create layer parameters
-        if static_parameters is None:
-            static_parameters = {}
-        self.static_parameters = static_parameters
+        layer_parameters: dict[str, Any],
+        layer_pass_function_names: list[str],
+        layer_update_function_name: Optional[str]=None,
+        layer_update_weights_function_name: Optional[str]=None,
+        object_name: Optional[str]=None, has_log_id=False
+    ) -> None:
+        # Set the log id if none is provided
+        if not has_log_id:
+            self.log_id = log.set_log_id(object_name, log.LAYER)
 
-        # Create learnable parameter pairs
-        if learnable_parameters is None:
-            learnable_parameters = {}
-        self.learnable_parameter_pairs = {}
-        self.set_learnable_parameter_pairs(learnable_parameters)
+        # Set the layer parameters
+        self.parameters = layer_parameters
 
-        # Each of the forward and backward function lists are a list of
-        #   function pointers.
-        # Create empty lists for the function pointer lists if they don't exist.
-        if forward_func_ptrs is None:
-            forward_func_ptrs = []
-        if backward_func_ptrs is None:
-            backward_func_ptrs = []
-
-        self.forward_func_ptrs = forward_func_ptrs
-        self.backward_func_ptrs = backward_func_ptrs
-
-
-    def forward(self, x: Tensor) -> Tensor:
-        # Store the input tensor in the layer attributes.
-        self.static_parameters['forward_input'] = x.clone()
-        
-        # Run the forward pass functions on the input x.
-        for func in self.forward_func_ptrs:
-            x = func(x, self.static_parameters)
-
-        # Store the output tensor in the layer attributes and return it.
-        self.static_parameters['forward_output'] = x.clone()
-        return x
-    
-
-    def backward(self, x: Tensor) -> Tensor:
-        # Store the input tensor in the layer attributes.
-        self.static_parameters['backward_input'] = x.clone()
-
-        # Run the backpropagation functions on the input tensor.
-        for func in self.backward_func_ptrs:
-            x = func(x, self.static_parameters)
-
-        # Store the output tensor in the layer attributes and return it.
-        self.static_parameters['backward_output'] = x.clone()
-        return x
-    
-    
-    def get_init_learnable_parameter_sets(self,
-        learnable_weights, learnable_biases,
-        weight_shapes, bias_shapes,
-        use_learnable_bias, num_learnable_sets
-    ) -> tuple[list[Tensor], list[Tensor]]:
-        """
-        Initialize the sets of learnable parameters if valid sets of them
-            are not already provided.
-
-        Args:
-            learnable_weights (list[Tensor]): List of learnable weights
-            learnable_biases (list[Tensor]): List of learnable biases
-            use_learnable_bias (bool): Flag to enable/disable biases
-            weight_shapes (list[Size]): Valid shapes for learnable weights
-            bias_shapes (list[Size]): Valid shapes for learnable biases
-            num_learnable_sets (int): The number of learnable sets
-
-        Return:
-            Tensors for the sets of learnable parameters
-        """
-        # Check if the provided learnable weights and biases (if applicable)
-        #   exist and are valid
-        if not self.check_valid_learnable_parameter_sets(
-            learnable_weights, learnable_biases,
-            weight_shapes, bias_shapes,
-            use_learnable_bias, num_learnable_sets
-        ):
-            # Initialize the learnable weights and biases
-            learnable_weights = []
-            learnable_biases = []
-            for i in range(num_learnable_sets):
-                learnable_weights.append(torch.randn(weight_shapes[i]))
-                learnable_biases.append(torch.randn(weight_shapes[i]))
-
-        # Return the learnable parameters
-        return learnable_weights, learnable_biases
-    
-    
-    def get_init_learnable_parameters(self,
-        learnable_weights, learnable_biases,
-        weight_shapes, bias_shapes,
-        use_learnable_bias
-    ) -> tuple[list[Tensor], list[Tensor]]:
-        """
-        Initialize the learnable parameters if valid ones are not
-            already provided.
-
-        Args:
-            learnable_weights (list[Tensor]): List of learnable weights
-            learnable_biases (list[Tensor]): List of learnable biases
-            use_learnable_bias (bool): Flag to enable/disable biases
-            weight_shapes (list[Size]): Valid shapes for learnable weights
-            bias_shapes (list[Size]): Valid shapes for learnable biases
-            num_learnable_sets (int): The number of learnable sets
-
-        Return:
-            Tensors for the learnable parameters
-        """
-        return self.get_init_learnable_parameter_sets(
-            learnable_weights, learnable_biases,
-            weight_shapes, bias_shapes,
-            use_learnable_bias, num_learnable_sets=1
-        )
-        
-    
-    def set_learnable_parameter_pairs(self, learnable_params) -> None:
-        # Each tuple in the layer's learnable parameters dictionary contains
-        #   the learnable parameter and its respective gradient
-
-        # Iterate through the learnable parameters to create tuples
-        #   containing the learnable parameter and its gradient
-        for param_name, learnable_param in learnable_params:
-            gradient = torch.zeros(learnable_param.shape)
-            self.learnable_parameter_pairs[param_name] = (
-                learnable_param, gradient
+        # Set the layer pass functions
+        self.pass_functions = []
+        # Iterate through the layer pass function names
+        for function_name in layer_pass_function_names:
+            # Get the pass function (a PassFunction object)
+            pass_function = get_tensor_function(
+                tensor_function_name=function_name,
+                tensor_function_cache_parameters=self.parameters,
+                tensor_update_function_name=layer_update_function_name,
+                tensor_update_weight_function_name=layer_update_weights_function_name
             )
+            # Only append the pass function if it exists
+            if pass_function is not None:
+                self.pass_functions.append(pass_function)
 
-    def get_learnable_parameter_pair(self, param_name=None) \
-                    -> Union[tuple[Tensor, Tensor], 
-                        dict[str, tuple[Tensor, Tensor]], None]:
-        if param_name:
-            # Check if the learning parameter exists
-            if param_name in self.learnable_parameter_pairs:
-                return self.learnable_parameter_pairs[param_name]
-        else:
-            # Return all the learning parameter pairs in the layer
-            return self.learnable_parameter_pairs
-        
-        # Invalid parameter name provided, return None
-        return None
-
-    def check_valid_learnable_parameter_sets(self,
-        learnable_weights, learnable_biases, use_learnable_bias,
-        weight_shapes, bias_shapes, num_learnable_sets
-    ) -> bool:
+    def forward(self,
+        x: Tensor,
+        kwargs: Optional[dict[str, Any]]=None,
+        output_keys: Optional[tuple[str, ...]]=None
+    ) -> tuple[Any, ...]:
         """
-        Check if the provided sets of learnable parameters are valid.
+        Run the layer's forward function on the input.
 
-        Args:
-            learnable_weights (list[Tensor]): List of learnable weights
-            learnable_biases (list[Tensor]): List of learnable biases
-            use_learnable_bias (bool): Flag to enable/disable biases
-            weight_shapes (list[Size]): Valid shapes for learnable weights
-            bias_shapes (list[Size]): Valid shapes for learnable biases
-            num_learnable_sets (int): The number of learnable sets
+        x (Tensor): The input tensor
+            kwargs (dict[str, Any]): The keyword arguments dict
+            output_keys (tuple[Any, ...]) The output keys tuple
 
         Return:
-            Boolean indicating if the sets of learnable parameters are valid
+            output_values (dict[str, Any]): Dict of output values
         """
-        # Check if learnable weights and biases (if applicable) exist
-        if learnable_weights is None \
-            or (learnable_biases is None and use_learnable_bias) \
-                                                                 \
-                or (learnable_weights   # Check valid weights
-                    and (len(learnable_weights) != num_learnable_sets
-                        or any([learnable_weights[i].shape != weight_shapes[i]]
-                                        for i in range(num_learnable_sets))
+        # Iterate through the forward functions
+        for function in self.pass_functions:
+            # Get the output values
+            output_values = function.forward(
+                x=x,
+                kwargs=kwargs,
+                output_keys=output_keys
+            )
+            # Get the input from the output values
+            x = output_values[0]
 
-                    or (learnable_weights and learnable_biases) # Check valid biases
-                        and(len(learnable_biases) != num_learnable_sets
-                        or any([learnable_biases[i].shape != bias_shapes[i]
-                                        for i in range(num_learnable_sets)])
-                        )
-                    )
-                ):
-            # The provided learnable parameters are not valid
-            return False
-        
-        # Else, the provided learnable parameters are valid
-        return True
-    
-    def check_valid_learnable_parameters(self,
-        learnable_weight, learnable_bias, use_learnable_bias,
-        weight_shape, bias_shape
-    ) -> bool:
+        # Return the output values
+        return output_values
+
+    def backward(self,
+        upstream_grad: Tensor,
+        kwargs: Optional[dict[str, Any]]=None,
+        output_keys: Optional[tuple[str, ...]]=None
+    ) -> tuple[Any, ...]:
         """
-        Check if the provided learnable parameters are valid.
+        Run the layer's backward function on the upstream gradient
 
-        Args:
-            learnable_weight (Tensor): Learnable weight
-            learnable_bias (Tensor): Learnable bias
-            use_learnable_bias (bool): Flag to enable/disable bias
-            weight_shape (Size): Valid shapes for learnable weight
-            bias_shape (Size): Valid shapes for learnable bias
+        x (Tensor): The input tensor
+            kwargs (dict[str, Any]): The keyword arguments dict
+            output_keys (tuple[Any, ...]) The output keys tuple
 
         Return:
-            Boolean indicating if the learnable parameters are valid
+            output_values (dict[str, Any]): Dict of output values
         """
-        return self.check_valid_learnable_parameter_sets(
-            learnable_weights=[learnable_weight],
-            learnable_biases=[learnable_bias],
-            use_learnable_bias=use_learnable_bias,
-            weight_shapes=[weight_shape],
-            bias_shapes=[bias_shape],
-            num_learnable_sets=1
+        # Iterate through the backward functions
+        for function in self.pass_functions:
+            # Get the output values
+            output_values = function.backward(
+                upstream_grad=upstream_grad,
+                kwargs=kwargs,
+                output_keys=output_keys
+            )
+            # Get the upstream gradient from the output values
+            upstream_grad = output_values[0]
+
+        # Return the output values
+        return output_values
+
+    def update(self) -> bool:
+        """
+        Update all of the layer's learnable parameters.
+
+        Args:
+            None
+
+        Return:
+            update_success (boolean): Boolean indicating success with updating
+        """
+        update_success = True
+
+        # Iterate through the pass functions
+        for function in self.pass_functions:
+            # Store the boolean result of updating the learnable parameters
+            # All tensor function updates should be successful, otherwise return False
+            if not function.update():
+                update_success = False
+
+        # Return the boolean result of updating the learnable parameters
+        return update_success
+
+
+# ==================== TRANSFORMER ENCODER/DECODER BLOCKS =====================
+
+class TransformerBlock(Layer):
+    """
+    This is the transformer encoder/decoder block (layer) class.
+    """
+    def __init__(self,
+        layer_pass_function_names: list[str],
+        layer_update_function_name: Optional[str]=None,
+        layer_update_weights_function_name: Optional[str]=None,
+        num_in_tokens=ml.NUM_IN_TOKENS, num_out_classes=ml.NUM_OUT_CLASSES,
+        embedding_size=ml.TRANSFORMER_EMBEDDING_SIZE,
+        feed_fwd_size=ml.FEED_FWD_SIZE,
+        max_seq_len=ml.MAX_SEQ_LEN,
+        num_attn_heads=attn.NUM_ATTN_HEADS, dropout=reg.DROPOUT,
+        object_name: Optional[str]=None, has_log_id=False
+    ) -> None:
+        # Set the log id if none is provided
+        if not has_log_id:
+            self.log_id = log.set_log_id(object_name, log.TRANSFORMER_BLOCK)
+
+        # Get the layer parameters for the transformer block
+        layer_parameters = {
+            'num_in_tokens': num_in_tokens,
+            'num_out_classes': num_out_classes,
+            'max_seq_len': max_seq_len,
+            'num_attn_heads': num_attn_heads,
+            'embedding_size': embedding_size,
+            'feed_fwd_size': feed_fwd_size,
+            'dropout': dropout
+        }
+
+        super().__init__(
+            layer_parameters=layer_parameters,
+            layer_pass_function_names=layer_pass_function_names,
+            layer_update_function_name=layer_update_function_name,
+            layer_update_weights_function_name=layer_update_weights_function_name
         )
-    
+
     
 # ============================ CONVOLUTION LAYER ==============================
-
-BATCH_SIZE = 4 # Default number of input examples for the input patches
-NUM_IN_CHANNELS = 3 # Default number of input channels for convolution
-NUM_OUT_FEATURES = 64 # Default number of output features for convolution
-KERNEL_SIZE = 3 # Default kernel size for convolution = (3, 3)
-STRIDE = 1 # Default stride for convolution and pooling
-PADDING = 0 # Default padding for convolution
-POOL_SIZE = 2 # Default pooling dimensions = (2, 2)
-POOL_STRIDE = 2 # Default pooling stride
-POOL_TYPE = "max" # Default pooling type
     
 class ConvolutionLayer(Layer):
     """
     This is the convolution layer class.
     """
     def __init__(self,
-        conv_weight=None, conv_bias=None,
-        use_conv_bias=True,
-        batch_size=BATCH_SIZE,
-        num_in_channels=NUM_IN_CHANNELS, num_out_features=NUM_OUT_FEATURES,
-        kernel_size=KERNEL_SIZE,
-        stride=STRIDE, padding=PADDING,
-        pool_type=POOL_TYPE,
-        pool_size=POOL_SIZE, pool_stride=POOL_STRIDE,
-        forward_func_ptrs=None,
-        backward_func_ptrs=None
-    ):
-        # Get the static parameters for the convolution layer
-        static_parameters = {
-            'use_bias': use_conv_bias,
-            'num_in_channels': num_in_channels, 'num_out_features': num_out_features,
-            'kernel_size': kernel_size, 'stride': stride, 'padding': padding,
-            'pool_size': pool_size, 'pool_stride': pool_stride, 'pool_type': pool_type
+        layer_pass_function_names: list[str],
+        layer_update_function_name: Optional[str]=None,
+        layer_update_weights_function_name: Optional[str]=None,
+        num_in_channels=ml.NUM_IN_CHANNELS, num_out_features=ml.NUM_OUT_FEATURES,
+        kernel_size=conv.KERNEL_SIZE,
+        stride=conv.STRIDE, padding=conv.PADDING,
+        pool_type=pool.POOL_TYPE,
+        pool_size=pool.KERNEL_SIZE, pool_stride=pool.STRIDE,
+        object_name: Optional[str]=None, has_log_id=False
+    ) -> None:
+        # Set the log id if none is provided
+        if not has_log_id:
+            self.log_id = log.set_log_id(object_name, log.CONVOLUTION_LAYER)
+
+        # Get the layer parameters for the convolution layer
+        layer_parameters = {
+            'num_in_channels': num_in_channels,
+            'num_out_channels': num_out_features,
+            'kernel_size': kernel_size,
+            'stride': stride,
+            'padding': padding,
+            'pool_size': pool_size,
+            'pool_stride': pool_stride,
+            'pool_type': pool_type
         }
 
-        # Get the learnable parameters for the convolution layer
-        learnable_parameters = {}
-
-        weight_shape = Size(
-            [batch_size, num_in_channels * kernel_size, num_out_features])
-        bias_shape = Size([num_out_features])
-
-        # Initialize the convolution weight and bias (if applicable),
-        #   along with the respective gradients
-        conv_weight, conv_bias = self.get_init_learnable_parameters(
-            conv_weight, conv_bias, use_conv_bias,
-            weight_shape, bias_shape
-        )
-        learnable_parameters['W_conv'] = conv_weight,
-        learnable_parameters['b_conv'] = conv_bias
-
         super().__init__(
-            static_parameters=static_parameters,
-            learnable_parameters=learnable_parameters,
-            forward_func_ptrs=forward_func_ptrs,
-            backward_func_ptrs=backward_func_ptrs
+            layer_parameters=layer_parameters,
+            layer_pass_function_names=layer_pass_function_names,
+            layer_update_function_name=layer_update_function_name,
+            layer_update_weights_function_name=layer_update_weights_function_name
         )
 
 
@@ -294,175 +218,32 @@ class ProjectionLayer(Layer):
     This is the projection layer class.
     """
     def __init__(self,
-        proj_weight=None, proj_bias=None,
-        use_proj_bias=True,
-        num_patches=NUM_PATCHES, embedding_size=EMBEDDING_SIZE,
-        forward_func_ptrs=None,
-        backward_func_ptrs=None
-    ):
+        layer_pass_function_names: list[str],
+        layer_update_function_name: Optional[str]=None,
+        layer_update_weights_function_name: Optional[str]=None,
+        pre_embedding_size=ml.TRANSFORMER_EMBEDDING_SIZE,
+        embedding_size=ml.TRANSFORMER_FINAL_EMBEDDING_SIZE,
+        object_name: Optional[str]=None, has_log_id=False
+    ) -> None:
+        # Set the log id if none is provided
+        if not has_log_id:
+            self.log_id = log.set_log_id(object_name, log.PROJECTION_LAYER)
+
         # Get the static parameters for the projection layer
-        static_parameters = {
-            'use_bias': use_proj_bias,
+        layer_parameters = {
+            'pre_embedding_size': pre_embedding_size,
             'embedding_size': embedding_size
         }
 
-        # Get the learnable parameters for the projection layer
-        learnable_parameters = {}
-
-        weight_shape = Size([num_patches, embedding_size])
-        bias_shape = Size([embedding_size])
-
-        # Initialize the projection weight and bias (if applicable),
-        #   along with the respective gradients
-        proj_weight, proj_bias = self.get_init_learnable_parameters(
-            proj_weight, proj_bias, use_proj_bias,
-            weight_shape, bias_shape
-        )
-        learnable_parameters['W_proj'] = proj_weight,
-        learnable_parameters['b_proj'] = proj_bias
-
         super().__init__(
-            static_parameters=static_parameters,
-            learnable_parameters=learnable_parameters,
-            forward_func_ptrs=forward_func_ptrs,
-            backward_func_ptrs=backward_func_ptrs
+            layer_parameters=layer_parameters,
+            layer_pass_function_names=layer_pass_function_names,
+            layer_update_function_name=layer_update_function_name,
+            layer_update_weights_function_name=layer_update_weights_function_name
         )
 
 
-# ==================== TRANSFORMER ENCODER/DECODER BLOCKS =====================
-
-BATCH_SIZE = 64 # Default number of input examples per input patches
-MAX_SEQ_LEN = 12 # Default max sequence length
-NUM_ATTN_HEADS = 2 # Default number of parallel attention heads
-EMBEDDING_SIZE = 64 # Default embedding size for encoding/decoding
-FEED_FWD_SIZE = 128 # Default size for feed forward network output
-DROPOUT = 0.1 # Default dropout value
-
-NUM_LAYER_NORM_OPS = 2 # Default number of layer normalization operations
-NUM_FEED_FORWARD_OPS = 2 # Default number of feed forward operations
-
-learnable_parameter_subscripts = [
-    'q', 'k', 'v', 'o'
-]
-
-class TransformerBlock(Layer):
-    """
-    This is the transformer encoder/decoder block (layer) class.
-    """
-    def __init__(self,
-        proj_weights=None, proj_biases=None,
-        use_proj_bias=True,
-        layer_norm_weights=None, layer_norm_biases=None,
-        use_layer_norm_bias=True, num_layer_norm_ops=NUM_LAYER_NORM_OPS,
-        feed_fwd_weights=None, feed_fwd_biases=None,
-        use_feed_fwd_bias=True, num_feed_fwd_ops=NUM_FEED_FORWARD_OPS,
-        batch_size=BATCH_SIZE,
-        num_attn_heads=NUM_ATTN_HEADS, max_seq_len=MAX_SEQ_LEN,
-        embedding_size=EMBEDDING_SIZE, feed_fwd_size=FEED_FWD_SIZE,
-        forward_func_ptrs=None,
-        backward_func_ptrs=None
-    ):
-        # First get number of learnable attention parameter sets and
-        #   size of individual attention heads
-        num_attn_parameter_sets = 4
-        assert embedding_size % num_attn_heads == 0
-        attn_head_size = embedding_size // num_attn_heads
-
-        # Get the static parameters for the transformer block
-        static_parameters = {
-            'use_proj_bias' : use_proj_bias,
-            'use_layer_norm_bias' : use_layer_norm_bias,
-            'use_feed_fwd_bias' : use_feed_fwd_bias,
-            'batch_size': batch_size, 'max_seq_len': max_seq_len,
-            'embedding_size': embedding_size,
-            'num_attn_heads': num_attn_heads, 'attn_head_size': attn_head_size
-        }
-
-        # Get the learnable parameters for the transformer block
-        learnable_parameters = {}
-
-        # Initialize the attention projection weight and bias
-        #   (if applicable), along with the respective gradients
-        proj_weight_shapes = [Size([embedding_size])
-                        for i in range(num_attn_parameter_sets)]
-        proj_bias_shapes = [Size([embedding_size])
-                        for i in range(num_attn_parameter_sets)]
-        
-        proj_weights, proj_biases = self.get_init_learnable_parameter_sets(
-            learnable_weights=proj_weights,
-            learnable_biases=proj_biases,
-            weight_shapes=proj_weight_shapes,
-            bias_shapes=proj_bias_shapes,
-            use_learnable_bias=use_proj_bias,
-            num_learnable_sets=num_attn_parameter_sets
-        )
-
-        for i in range(len(learnable_parameter_subscripts)):
-            subscript = learnable_parameter_subscripts[i]
-            learnable_parameters['W'+subscript+"_proj"] = proj_weights[i]
-            learnable_parameters['b'+subscript+"_proj"] = proj_biases[i]
-        
-        # Initialize the layer norm weights, biases (if applicable),
-        #   and gradients
-        layer_norm_weight_shapes = [Size([embedding_size])
-                        for i in range(num_attn_parameter_sets)]
-        layer_norm_bias_shapes = [Size([embedding_size])
-                        for i in range(num_attn_parameter_sets)]
-        
-        layer_norm_weights, layer_norm_biases = \
-            self.get_init_learnable_parameter_sets(
-                learnable_weights=layer_norm_weights,
-                learnable_biases=layer_norm_biases,
-                weight_shapes=layer_norm_weight_shapes,
-                bias_shapes=layer_norm_bias_shapes,
-                use_learnable_bias=use_layer_norm_bias,
-                num_learnable_sets=num_layer_norm_ops
-            )
-        
-        for i in range(num_layer_norm_ops):
-            learnable_parameters['gamma_'+str(i+1)] = layer_norm_weights[i]
-            learnable_parameters['beta_'+str(i+1)] = layer_norm_biases[i]
-                
-        # Initialize the feed forward weights, biases (if applicable),
-        #   and gradients
-        feed_fwd_weight_shapes = [
-            Size([embedding_size, feed_fwd_size]) if i % 2 == 0
-            else Size([feed_fwd_size, embedding_size])
-                for i in range(num_attn_parameter_sets)
-        ]
-        feed_fwd_bias_shapes = [
-            Size([feed_fwd_size]) if i % 2 == 0
-            else Size([embedding_size])
-                for i in range(num_attn_parameter_sets)
-        ]
-        
-        feed_fwd_weights, feed_fwd_biases = \
-            self.get_init_learnable_parameter_sets(
-                learnable_weights=feed_fwd_weights,
-                learnable_biases=feed_fwd_biases,
-                weight_shapes=feed_fwd_weight_shapes,
-                bias_shapes=feed_fwd_bias_shapes,
-                use_learnable_bias=use_feed_fwd_bias,
-                num_learnable_sets=num_feed_fwd_ops
-            )
-        
-        for i in range(num_layer_norm_ops):
-            learnable_parameters['Wff_'+str(i+1)+'_proj'] = feed_fwd_weights[i]
-            learnable_parameters['bff_'+str(i+1)+'_proj'] = feed_fwd_biases[i]
-
-        # Take all the learnable parameters and create a dictionary containing
-        #   tuples of learnable parameters and their respective gradient
-        self.set_learnable_parameter_pairs(learnable_parameters)
-
-        super().__init__(
-            static_parameters=static_parameters,
-            learnable_parameters=learnable_parameters,
-            forward_func_ptrs=forward_func_ptrs,
-            backward_func_ptrs=backward_func_ptrs
-        )
-
-
-# ============================= HELPER METHODS ================================
+# =============================== LAYER LOOKUP ================================
 
 layer_subclasses = {
     'convolution_layer' : ConvolutionLayer,
@@ -470,7 +251,13 @@ layer_subclasses = {
     'transformer_block' : TransformerBlock
 }
 
-def get_layer(layer_type: str, layer_parameters: dict[str, Any]) -> Layer:
+def get_layer(
+    layer_type: str,
+    layer_parameters: dict[str, Any],
+    layer_pass_function_names: list[str],
+    layer_update_function_name: Optional[str]=None,
+    layer_update_weights_function_name: Optional[str]=None
+) -> Layer:
     """
     Return a Layer subclass object with the specified layer parameters.
 
@@ -481,6 +268,11 @@ def get_layer(layer_type: str, layer_parameters: dict[str, Any]) -> Layer:
     Return:
         The Layer subclass object
     """
+    # Get the layer subclass with its layer parameters
     layer_subclass = layer_subclasses[layer_type]
-
-    return layer_subclass(**layer_parameters)
+    return layer_subclass(
+        layer_pass_function_names=layer_pass_function_names,
+        layer_update_function_name=layer_update_function_name,
+        layer_update_weights_function_name=layer_update_weights_function_name,
+        **layer_parameters,
+    )
