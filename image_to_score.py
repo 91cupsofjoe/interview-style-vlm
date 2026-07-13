@@ -171,7 +171,7 @@ class ImageScorer:
         try:
             captions = self.image_captioner.caption(image_filename)
         except:
-            lg.log_error("Couldn't encode the image!", lg.IMAGE_SCORER)
+            lg._log_error("Couldn't encode the image!", lg.IMAGE_SCORER)
 
         # Predict and return the image's score
         return self.caption_scorer.score(captions)
@@ -209,7 +209,7 @@ if __name__ == '__main__':
     do_model_training = DO_MODEL_TRAINING
 
     # Parse and store command-line arguments in dictionary
-    parsed_args = tensor_ops.parse_args(
+    parsed_args = tensor_ops._parse_args(
         command_line_args=sys.argv,
         valid_keys=[
             # Command-line keys for the image captioner
