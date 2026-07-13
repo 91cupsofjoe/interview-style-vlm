@@ -5,7 +5,7 @@ This module is for the image captioner model. It comprises of two submodules,
 """
 from typing import Optional
 
-from function import \
+from tensor_function import \
     attention as attn, convolution as conv, \
     pool, regularization as reg, \
     update
@@ -57,7 +57,7 @@ class ImageCaptioner:
         object_name: Optional[str]=None
     ):
         # Set the log id for the image encoder
-        self.log_id = log.set_log_id(object_name, log.IMAGECAPTIONER)
+        self.log_id = log._set_log_id(object_name, log.IMAGECAPTIONER)
 
         # If not loading the image encoder data, set the filename to None
         if not load_image_encoder_data:
@@ -100,7 +100,7 @@ class ImageCaptioner:
             **cnn_model_hyperparameters,
             base_model_hyperparameters=base_model_hyperparameters,
             images_filename=images_filename,
-            context_vectors_filename=context_vectors_filename,
+            context_data_filename=context_vectors_filename,
             training_test_split=training_test_split,
             model_data_filename=image_encoder_data_filename,
             object_name='image_encoder'

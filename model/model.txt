@@ -48,9 +48,9 @@ def get_gradients(self,
                d(L)/d(h) = d(L)/d(z_proj) * (W_proj)^T. Then we have:
 
                     d(L)/d(z_conv)
-                    = unflatten( d(L)/d(h) )
+                    = _unflatten( d(L)/d(h) )
                     = d(L)/d(z_conv)
-                    = unflatten( d(L)/d(z_proj) * (W_proj)^T )
+                    = _unflatten( d(L)/d(z_proj) * (W_proj)^T )
                     = reshape( d(L)/d(z_proj) * (W_proj)^T, shape(z_conv) )
                     = reshape( d( (z_proj - y)^2 - lambda||W||^2 )/d(z_proj)
                                   * (W_proj)^T, shape(z_conv) )

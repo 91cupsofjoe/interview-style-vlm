@@ -1,71 +1,79 @@
 {
     "cnn" : {
 
-        "sequence_blocks" : {
+        "loss_function" : "binary_cross_entropy_loss",
+
+        "hyperparameters" : {
+            "batch_size" : 12,
+            "reg_type" : "ridge",
+            "reg_strength" : 1e-4,
+            "kernel_size" : [3, 3],
+            "stride" : 1,
+            "padding" : 1,
+            "pool_size" : [2, 2],
+            "pool_stride" : [2, 2],
+            "pool_type" : "max"
+        },
+
+        "sequences" : {
 
             "convolution" : {
 
-                "forward_functions" : [
-                    "conv2d", "relu", "pool", "flatten"
+                "pass_functions" : [
+                    "conv2d", "relu", "pool"
                 ],
 
                 "layers" : [
                     {
                         "num_in_channels" : 3,
-                        "num_out_features" : 64,
-                        "kernel_size" : [3, 3],
-                        "stride" : 1,
-                        "padding" : 1,
-                        "pool_size" : [2, 2],
-                        "pool_stride" : 2,
-                        "pool_type" : "max"
+                        "num_out_features" : 64
                     },
 
                     {
                         "num_in_channels" : 64,
-                        "num_out_features" : 128,
-                        "kernel_size" : [3, 3],
-                        "stride" : 1,
-                        "padding" : 1,
-                        "pool_size" : [2, 2],
-                        "pool_stride" : 2,
-                        "pool_type" : "max"
+                        "num_out_features" : 128
                     },
 
                     {
                         "num_in_channels" : 128,
-                        "num_out_features" : 256,
-                        "kernel_size" : [3, 3],
-                        "stride" : 1,
-                        "padding" : 1,
-                        "pool_size" : [2, 2],
-                        "pool_stride" : 2,
-                        "pool_type" : "max"
+                        "num_out_features" : 256
                     },
 
                     {
                         "num_in_channels" : 256,
-                        "num_out_features" : 512,
-                        "kernel_size" : [3, 3],
-                        "stride" : 1,
-                        "padding" : 1,
-                        "pool_size" : [2, 2],
-                        "pool_stride" : 2,
-                        "pool_type" : "max"
+                        "num_out_features" : 512
                     }
                 ]
             },
 
             "projection" : {
 
-                "forward_functions" : [
-                    "lin_proj"
+                "pass_functions" : [
+                    "flatten", "linear_projection"
+                ],
+
+                "_comments" : [
+                    "pre_embedding_size =",
+                    "num_out_features * final pooled height * final pooled width",
+                    "pre_embedding_size = 512 * (224 / 2 / 2 / 2 / 2) * (224 / 2 / 2 / 2 / 2",
+                    "pre_embedding_size = 512 * 14 * 14 = 100352"
+                ],
+
+                "_comments_2" : [
+                    "Layers with pass_functions as a parameter overrides the ",
+                    "pass functions list above."
                 ],
 
                 "layers" : [
                     {
-                        "num_in_features" : 512,
+                        "pre_embedding_size" : 100352,
                         "embedding_size" : 768
+                    },
+
+                    {
+                        "pass_functions" : ["linear_projection"],
+                        "pre_embedding_size" : 768,
+                        "embedding_size" : 80
                     }
                 ]
             }
@@ -74,11 +82,18 @@
 
     "transformer" : {
 
-        "sequence_blocks" : {
+        "loss_function" : "cross_entropy_loss",
+
+        "hyperparameters" : {
+            "reg_type" : "ridge",
+            "reg_strength" : 1.5
+        },
+
+        "sequences" : {
 
             "embedding" : {
                 
-                "forward_functions" : [
+                "pass_functions" : [
                     "get_embedded_tokens"
                 ],
 
@@ -89,9 +104,9 @@
                 ]
             },
 
-            "transformer_encoder" : {
+            "encoding" : {
 
-                "forward_functions" : [
+                "pass_functions" : [
                     "multi_head_attention",
                         "dropout", "residual_add", "layer_norm",
                     "feed_forward",
@@ -125,7 +140,7 @@
                 ]
             },
 
-            "transformer_decoder" : {
+            "decoding" : {
 
                 "pass_functions" : [
                     "multi_head_masked_self_attention",
@@ -171,7 +186,7 @@
 
                 "layers" : [
                     {
-                        "num_in_features" : 256,
+                        "pre_embedding_size" : 256,
                         "embedding_size" : 512
                     }
                 ]

@@ -22,7 +22,7 @@ class CaptionDecoder(Transformer):
         object_name: Optional[str]=None
     ):
         # Set the log id for the caption decoder
-        self.log_id = log.set_log_id(object_name, log.CAPTIONDECODER)
+        self.log_id = log._set_log_id(object_name, log.CAPTIONDECODER)
 
         # Initialize the captions dataset if not provided
         if captions_dataset is None:
